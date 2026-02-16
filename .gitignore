@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Build output
+dist/
+*.dmg
+*.blockmap
+
+# Environment & secrets
+.env
+.env.*
+credentials.json
+token.json
+auth.json
+projects.json
+settings.json
+
+# Legacy data
+Assets/Agents/Core/
+
+# macOS
+.DS_Store
+**/.DS_Store
+*.swp
+._*
+
+# Temp / Debug
+.tmp/
+*.log
+/tmp/
+
+# IDE / Tools
+.claude/
+.vscode/
+.idea/
+
+# Xcode build
+FinderExtension/build/
+FinderExtension/*.xcodeproj/xcuserdata/
+FinderExtension/JellySvnHelper.xcodeproj/
+
+# Python
+__pycache__/
+*.pyc

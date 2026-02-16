@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self' 'unsafe-inline';">
+    <title>JellySvn | Premium SVN Client</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <meta name="description" content="JellySvn - A premium SVN GUI tool with seamless workflow.">
+</head>
+
+<body class="dark-mode">
+    <div class="titlebar" id="titlebar"></div>
+    <div class="app-container">
+        <aside class="sidebar">
+            <div class="logo">
+                <span class="logo-icon">🪼</span>
+                <span class="logo-text">JellySvn</span>
+            </div>
+            <nav class="nav-menu">
+                <button class="nav-item active" id="btn-status">
+                    <span class="icon">📊</span> Status
+                </button>
+                <button class="nav-item" id="btn-update-all">
+                    <span class="icon">📥</span> Update All
+                </button>
+                <button class="nav-item" id="btn-commit-view">
+                    <span class="icon">📤</span> Commit
+                </button>
+                <button class="nav-item" id="btn-revert-view">
+                    <span class="icon">🔄</span> Revert
+                </button>
+                <button class="nav-item" id="btn-checkout">
+                    <span class="icon">🚀</span> Checkout
+                </button>
+                <button class="nav-item" id="btn-log">
+                    <span class="icon">📜</span> Log
+                </button>
+                <button class="nav-item" id="btn-tree">
+                    <span class="icon">📁</span> Tree
+                </button>
+                <button class="nav-item" id="btn-auth">
+                    <span class="icon">🔑</span> Auth
+                </button>
+                <button class="nav-item" id="btn-properties">
+                    <span class="icon">📋</span> Properties
+                </button>
+                <button class="nav-item" id="btn-branch">
+                    <span class="icon">🌿</span> Branch
+                </button>
+                <button class="nav-item" id="btn-lock">
+                    <span class="icon">🔒</span> Lock
+                </button>
+                <button class="nav-item" id="btn-blame">
+                    <span class="icon">👤</span> Blame
+                </button>
+                <button class="nav-item" id="btn-merge">
+                    <span class="icon">🔀</span> Merge
+                </button>
+                <button class="nav-item" id="btn-export">
+                    <span class="icon">📦</span> Export
+                </button>
+                <button class="nav-item" id="btn-search">
+                    <span class="icon">🔍</span> Search
+                </button>
+                <button class="nav-item" id="btn-ignore">
+                    <span class="icon">🚫</span> Ignore
+                </button>
+                <button class="nav-item" id="btn-tools">
+                    <span class="icon">🛠️</span> Tools
+                </button>
+                <div class="nav-spacer"></div>
+                <button class="nav-item" id="btn-settings">
+                    <span class="icon">⚙️</span> Settings
+                </button>
+            </nav>
+            <div class="repo-info">
+                <h3>REPOSITORY</h3>
+                <div class="repo-path" id="current-repo">Not Connected</div>
+                <button class="btn-secondary" id="btn-browse">Change Repo</button>
+            </div>
+        </aside>
+
+        <main class="main-content">
+            <div class="project-tabs" id="project-tabs">
+                <!-- Tabs will be injected here -->
+                <button class="add-tab" onclick="elements.checkoutModal.classList.remove('hidden')">+</button>
+            </div>
+            <header class="top-bar">
+                <h1 id="page-title">Working Copy Status</h1>
+                <div class="top-actions">
+                    <div class="bulk-actions hidden" id="bulk-actions">
+                        <span id="selected-count">0 files selected</span>
+                        <button class="btn-secondary" id="btn-bulk-update">Update</button>
+                        <button class="btn-secondary" id="btn-bulk-revert">Revert</button>
+                        <button class="btn-primary" id="btn-bulk-commit">Commit</button>
+                    </div>
+                    <button class="btn-primary" id="btn-refresh">Refresh</button>
+                </div>
+            </header>
+
+            <div id="operation-overlay" class="operation-overlay hidden">
+                <div class="operation-spinner"></div>
+                <span id="operation-label">Processing...</span>
+            </div>
+
+            <section class="content-area" id="main-view">
+                <div class="empty-state">
+                    <div class="loading-spinner"></div>
+                    <p>Scanning working copy...</p>
+                </div>
+            </section>
+
+            <footer class="bottom-panel">
+                <div class="panel-header" id="panel-header-toggle" style="cursor: pointer;">
+                    <span>Console Output <span id="console-toggle-icon">▼</span></span>
+                    <button class="btn-icon" id="btn-clear-console">×</button>
+                </div>
+                <div class="console-content" id="console-log">
+                    <div class="log-entry system">System initialized. Ready for SVN operations.</div>
+                </div>
+            </footer>
+        </main>
+    </div>
+
+    <!-- Modals -->
+    <div id="modal-container" class="modal-overlay hidden">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2 id="modal-title">Commit Changes</h2>
+                <button class="close-modal" onclick="closeModal()">×</button>
+            </div>
+            <div class="modal-body">
+                <textarea id="commit-message" placeholder="Enter commit message..."></textarea>
+                <div class="file-summary" id="commit-file-list">
+                    <!-- Files to commit -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary close-modal" onclick="closeModal()">Cancel</button>
+                <button class="btn-primary" id="btn-confirm-commit">Confirm Commit</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Checkout Modal -->
+    <div id="checkout-modal" class="modal-overlay hidden">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2>SVN Checkout</h2>
+                <button class="close-modal" onclick="closeModal()">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="input-group">
+                    <label>Repository URL</label>
+                    <input type="text" id="checkout-url" placeholder="https://svn.example.com/repo/trunk">
+                </div>
+                <div class="input-group">
+                    <label>Local Path</label>
+                    <div class="input-with-button">
+                        <input type="text" id="checkout-path" placeholder="/path/to/local/dir">
+                        <button class="btn-secondary" id="btn-browse-local">Browse</button>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary close-modal" onclick="closeModal()">Cancel</button>
+                <button class="btn-primary" id="btn-confirm-checkout">Checkout</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Auth Modal -->
+    <div id="auth-modal" class="modal-overlay hidden">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2>SVN Authentication</h2>
+                <button class="close-modal" onclick="closeModal()">×</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-info">Credentials required for this repository.</p>
+                <div class="input-group">
+                    <label>Repository (or 'global')</label>
+                    <input type="text" id="auth-url" placeholder="global">
+                </div>
+                <div class="input-group">
+                    <label>Username</label>
+                    <input type="text" id="auth-username" placeholder="svn_user">
+                </div>
+                <div class="input-group">
+                    <label>Password</label>
+                    <input type="password" id="auth-password" placeholder="••••••••">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary close-modal" onclick="closeModal()">Cancel</button>
+                <button class="btn-primary" id="btn-save-auth">Save Credentials</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Diff Viewer Modal -->
+    <div id="diff-modal" class="modal-overlay hidden">
+        <div class="diff-modal-card">
+            <div class="modal-header">
+                <h2 id="diff-modal-title">Diff Viewer</h2>
+                <button class="close-modal" onclick="closeDiffModal()">×</button>
+            </div>
+            <div class="diff-toolbar">
+                <span class="diff-legend">
+                    <span class="legend-item legend-added">+ Added</span>
+                    <span class="legend-item legend-removed">− Removed</span>
+                    <span class="legend-item legend-changed">~ Changed</span>
+                </span>
+                <div class="diff-toolbar-right">
+                    <div class="diff-mode-toggle">
+                        <button class="active" data-mode="inline" onclick="toggleDiffMode('inline')">Inline</button>
+                        <button data-mode="side-by-side" onclick="toggleDiffMode('side-by-side')">Side by Side</button>
+                    </div>
+                    <button class="btn-secondary btn-small" onclick="copyDiffToClipboard()">Copy</button>
+                </div>
+            </div>
+            <div class="diff-content" id="diff-content">
+                <!-- Diff lines rendered here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Keyboard Shortcuts Modal -->
+    <div id="shortcuts-modal" class="modal-overlay hidden">
+        <div class="modal-card shortcuts-modal-card">
+            <div class="modal-header">
+                <h2>Keyboard Shortcuts</h2>
+                <button class="close-modal" onclick="closeShortcutsModal()">×</button>
+            </div>
+            <div class="shortcuts-body">
+                <div class="shortcuts-section">
+                    <h3>Navigation</h3>
+                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>1</kbd><span>Status</span></div>
+                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>2</kbd><span>Commit</span></div>
+                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>3</kbd><span>Revert</span></div>
+                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>4</kbd><span>Log</span></div>
+                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>5</kbd><span>Tree</span></div>
+                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>6</kbd><span>Auth</span></div>
+                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>7</kbd><span>Properties</span></div>
+                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>8</kbd><span>Branch</span></div>
+                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>9</kbd><span>Settings</span></div>
+                </div>
+                <div class="shortcuts-section">
+                    <h3>Actions</h3>
+                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>R</kbd><span>Refresh</span></div>
+                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>U</kbd><span>Update All</span></div>
+                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>Enter</kbd><span>Commit (in commit view)</span></div>
+                    <div class="shortcut-row"><kbd>Escape</kbd><span>Close modals</span></div>
+                    <div class="shortcut-row"><kbd>?</kbd><span>Show this help</span></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>

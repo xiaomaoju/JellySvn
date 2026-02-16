@@ -1,0 +1,86 @@
+{
+  "name": "jelly-svn",
+  "version": "1.0.0",
+  "description": "JellySvn - Premium SVN GUI Client for macOS",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --mac",
+    "build:dmg": "electron-builder --mac dmg",
+    "build:zip": "electron-builder --mac zip",
+    "build:universal": "electron-builder --mac --universal"
+  },
+  "build": {
+    "appId": "com.jellysvn.app",
+    "productName": "JellySvn",
+    "buildVersion": "1",
+    "copyright": "Copyright © 2026 JellySvn Team. All rights reserved.",
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "assets/icon.icns",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
+      "darkModeSupport": true,
+      "minimumSystemVersion": "12.0"
+    },
+    "dmg": {
+      "sign": false,
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ],
+      "window": {
+        "width": 540,
+        "height": 380
+      }
+    },
+    "afterSign": "scripts/notarize.js",
+    "files": [
+      "main.js",
+      "preload.js",
+      "index.html",
+      "app.js",
+      "style.css",
+      "assets/**/*",
+      "!assets/*.psd",
+      "!assets/*.sketch"
+    ],
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    }
+  },
+  "author": "JellySvn Team",
+  "license": "MIT",
+  "devDependencies": {
+    "@electron/notarize": "^3.1.1",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  }
+}
