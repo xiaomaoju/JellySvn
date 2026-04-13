@@ -34,6 +34,8 @@ Assets/Agents/Core/
 .claude/
 .vscode/
 .idea/
+.omc/
+**/.omc/
 
 # Xcode build
 FinderExtension/build/

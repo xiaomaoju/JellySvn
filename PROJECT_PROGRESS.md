@@ -13,8 +13,8 @@
 | **유형** | Premium SVN GUI Client (Electron Desktop App) |
 | **플랫폼** | macOS (ARM64) |
 | **경로** | `.` |
-| **버전** | v1.0.0 |
-| **최종 업데이트** | 2026-02-16 |
+| **버전** | v1.1.0 |
+| **최종 업데이트** | 2026-03-05 |
 
 ---
 
@@ -22,10 +22,11 @@
 
 | 레이어 | 기술 | 파일 |
 |--------|------|------|
-| **Main Process** | Electron 33+, Node.js | `main.js` (431 lines) |
-| **Preload Bridge** | contextBridge, 12 API methods | `preload.js` (32 lines) |
-| **Frontend** | Vanilla JS | `app.js` (2,347 lines) |
-| **UI** | Vanilla HTML5/CSS3, Glassmorphism Dark-mode | `index.html` (247 lines), `style.css` (1,567 lines) |
+| **Main Process** | Electron 33+, Node.js | `main.js` (586 lines) |
+| **Preload Bridge** | contextBridge, 23 API methods | `preload.js` (44 lines) |
+| **Frontend** | Vanilla JS | `app.js` (5,286 lines) |
+| **i18n** | Multi-language (en/ko) | `i18n.js` (1,001 lines) |
+| **UI** | Vanilla HTML5/CSS3, Glassmorphism Dark-mode | `index.html` (188 lines), `style.css` (2,547 lines) |
 | **Legacy Server** | Python http.server | `server.py` (224 lines) |
 | **Execution** | Python CLI wrapper | `execution/svn_tool.py` (50 lines) |
 | **빌드** | electron-builder | `package.json` |
@@ -48,12 +49,13 @@ SvnGUITool/
 │   └── svn_tool.py           ← Python SVN CLI wrapper
 ├── node_modules/             ← npm 의존성
 ├── .tmp/                     ← 임시 파일 (커밋 금지)
-├── app.js                    ← 프론트엔드 로직 (2,347 lines)
+├── app.js                    ← 프론트엔드 로직 (5,286 lines)
 ├── CLAUDE.md                 ← Claude Code 프로젝트 지침
+├── i18n.js                   ← 다국어 번역 시스템 (1,001 lines)
 ├── index.html                ← HTML 구조 + 모달
 ├── main.js                   ← Electron Main Process + IPC
 ├── package.json              ← npm 설정 + electron-builder
-├── preload.js                ← Context Bridge (12 APIs)
+├── preload.js                ← Context Bridge (23 APIs)
 ├── server.py                 ← 레거시 Python 서버
 ├── style.css                 ← Glassmorphism Dark UI (1,567 lines)
 └── PROJECT_PROGRESS.md       ← 이 파일
@@ -76,7 +78,7 @@ SvnGUITool/
 │  │  └────┬────┘  └──────────┘  └──────────┘ │  │
 │  │       │ window.api.*                       │  │
 │  │  ┌────▼────┐                               │  │
-│  │  │preload.js│  ← contextBridge (12 APIs)  │  │
+│  │  │preload.js│  ← contextBridge (23 APIs)  │  │
 │  │  └────┬────┘                               │  │
 │  └───────┼───────────────────────────────────┘  │
 │          │ ipcRenderer.invoke()                  │
@@ -296,33 +298,44 @@ SVN 명령어:
 | `listDirectory(dirPath)` | `list-directory` | 디렉토리 목록 |
 | `loadSettings()` | `load-settings` | 설정 로드 |
 | `saveSettings(settings)` | `save-settings` | 설정 저장 |
+| `searchFiles(path, query, type)` | `search-files` | 파일 검색 (이름/내용) |
+| `saveFileDialog(defaultName)` | `save-file-dialog` | 파일 저장 다이얼로그 |
+| `writeFile(filePath, content)` | `write-file` | 파일 쓰기 |
+| `openFileDialog()` | `open-file-dialog` | 파일 열기 다이얼로그 |
 | `watchDirectory(dirPath)` | `watch-directory` | 파일 감시 시작 |
 | `unwatchDirectory()` | `unwatch-directory` | 파일 감시 중지 |
 | `onFileChanged(callback)` | `file-changed` | 파일 변경 이벤트 수신 |
+| `openExternalDiff(options)` | `open-external-diff` | 외부 Diff 도구 실행 |
+| `copyFile(srcPath, destPath)` | `copy-file` | 파일 복사 (드래그앤드롭) |
 
 ---
 
 ## 9. UI 네비게이션 구조
 
 ```
-사이드바 (현재)              사이드바 (Sprint 4 완료 후)
-├── 📊 Status               ├── 📊 Status
-├── 📥 Update All           ├── 📥 Update All
-├── 📤 Commit               ├── 📤 Commit
-├── 🔄 Revert               ├── 🔄 Revert
-├── 🚀 Checkout             ├── 🚀 Checkout
-├── 📜 Log                  ├── 📜 Log
-├── 📁 Tree                 ├── 📁 Tree
-├── 🔑 Auth                 ├── 🔑 Auth
-├── 📋 Properties           ├── 📋 Properties
-├── 🌿 Branch               ├── 🌿 Branch
-├── ───                      ├── 🔒 Lock        ← NEW (P1)
-├── ⚙️ Settings              ├── 👤 Blame       ← NEW (P2)
-└──                          ├── 🔀 Merge       ← NEW (P3)
-                             ├── 📦 Export       ← NEW (P4)
-                             ├── 🔍 Search       ← NEW (P5)
-                             ├── ───
-                             └── ⚙️ Settings
+사이드바 (v1.1.0 현재)
+├── 📊 Status
+├── 📥 Update All
+├── 📤 Commit
+├── 🔄 Revert
+├── 🚀 Checkout
+├── 📜 Log
+├── 📁 Tree
+├── 🔑 Auth
+├── 📋 Properties
+├── 🌿 Branch
+├── 🔗 Externals        ← Sprint 7
+├── 🔒 Lock             ← Sprint 4
+├── 👤 Blame            ← Sprint 4
+├── 🔀 Merge            ← Sprint 4
+├── 📦 Export            ← Sprint 4
+├── 🔍 Search           ← Sprint 4
+├── 🚫 Ignore           ← Sprint 5
+├── 🌐 Repo Browser     ← Sprint 6
+├── 📌 Shelve           ← Sprint 6
+├── 🔧 Tools            ← Sprint 5-6
+├── ───
+└── ⚙️ Settings
 ```
 
 ---
@@ -431,5 +444,32 @@ npm run build
 
 ---
 
-*마지막 업데이트: 2026-02-16*
-*작성: AG-PM + AG-DOC*
+## 14. Sprint 7 구현 완료 로그 (2026-03-05)
+
+### 구현된 기능 (v1.1.0)
+
+| # | 기능 | 상태 | 설명 |
+|---|------|------|------|
+| 1 | **i18n (다국어 지원)** | ✅ 완료 | 한국어/영어 지원, i18n.js 번역 시스템, t() 함수, 동적 사이드바 렌더링, Settings 언어 선택 |
+| 2 | **SVN Externals 관리** | ✅ 완료 | svn:externals 조회/추가/수정/삭제, Raw 편집 모드, Update Externals, 파싱 엔진 |
+| 3 | **Drag & Drop 파일 조작** | ✅ 완료 | 외부 파일 드롭(svn add), 카드 드래그 선택, Tree 뷰 svn move, MutationObserver 자동 바인딩 |
+
+### 변경된 파일
+
+| 파일 | 변경 내용 |
+|------|-----------|
+| `i18n.js` (신규) | 번역 데이터(en/ko ~350키), t() 함수, setLanguage(), initLanguage() |
+| `app.js` | renderSidebar(), bindNavEvents(), i18n 적용(switchView/render/settings/operations), externals 뷰(CRUD+Raw), Drag & Drop(외부 파일/카드/트리) |
+| `index.html` | 동적 사이드바(nav-menu), i18n.js 스크립트 태그 |
+| `style.css` | externals 컨테이너, drag & drop 스타일(drop-zone, dragging, ghost, tree-drop-target) |
+| `CLAUDE.md` | Sprint 7 완료 반영, v1.1.0 |
+
+### 검증 결과
+- JavaScript 문법 검증: app.js, i18n.js, main.js, preload.js 모두 통과 (node -c)
+- 사이드바 동적 렌더링: renderSidebar()로 완전 교체, 언어 변경 시 실시간 재렌더링
+- Externals 뷰: Ignore 뷰와 동일한 패턴 (target selector, CRUD, raw edit)
+
+---
+
+*마지막 업데이트: 2026-03-05*
+*작성: Claude Code*

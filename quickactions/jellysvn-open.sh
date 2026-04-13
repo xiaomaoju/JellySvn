@@ -36,9 +36,11 @@ TARGET="${SVN_ROOT:-$FOLDER}"
 
 # Possible app locations
 APP_PATHS=(
+    "/Applications/JellySvn.app"
     "/Applications/SVN Antigravity.app"
     "/Applications/JELLYSVN.app"
     "/Applications/SVN GUI Tool.app"
+    "$HOME/Applications/JellySvn.app"
     "$HOME/Applications/SVN Antigravity.app"
     "$HOME/Applications/JELLYSVN.app"
 )
@@ -57,3 +59,4 @@ if [ -z "$APP_PATH" ]; then
 fi
 
 open -a "$APP_PATH" --args "$TARGET"
+osascript -e "display notification \"Opening $(basename "$TARGET")\" with title \"JellySvn\""

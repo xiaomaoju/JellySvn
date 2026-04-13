@@ -35,4 +35,16 @@ contextBridge.exposeInMainWorld('api', {
     watchDirectory: (dirPath) => ipcRenderer.invoke('watch-directory', dirPath),
     unwatchDirectory: () => ipcRenderer.invoke('unwatch-directory'),
     onFileChanged: (callback) => ipcRenderer.on('file-changed', (_event, payload) => callback(payload)),
+
+    // File copy (for drag & drop)
+    copyFile: (srcPath, destPath) => ipcRenderer.invoke('copy-file', srcPath, destPath),
+
+    // External diff tool
+    openExternalDiff: (options) => ipcRenderer.invoke('open-external-diff', options),
+
+    // Command-line open args (from Quick Actions / Finder right-click)
+    onOpenWithArgs: (callback) => {
+        ipcRenderer.removeAllListeners('open-with-args');
+        ipcRenderer.on('open-with-args', (_event, args) => callback(args));
+    },
 });

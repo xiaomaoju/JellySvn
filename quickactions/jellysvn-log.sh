@@ -49,6 +49,9 @@ if [ -z "$SVN_ROOT" ]; then
     exit 0
 fi
 
+# Progress notification
+osascript -e "display notification \"Fetching log entries...\" with title \"🔄 JellySvn\" subtitle \"$(basename "$SVN_ROOT")\""
+
 # Get last 10 log entries
 LOG_OUTPUT=$("$SVN" log "$SVN_ROOT" --limit 10 --non-interactive --trust-server-cert 2>&1)
 EXIT_CODE=$?

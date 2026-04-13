@@ -2378,3 +2378,243 @@ textarea#commit-message {
     text-align: center;
     flex-shrink: 0;
 }
+
+/* =============================================
+   Sprint 6: New Features Styles
+   ============================================= */
+
+/* Log Actions Row */
+.log-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.log-card .log-header {
+    display: flex;
+    align-items: center;
+}
+
+/* Repo Browser */
+.repo-browser-container .status-card {
+    transition: background 0.2s;
+}
+
+.repo-browser-container .status-card[onclick] {
+    cursor: pointer;
+}
+
+.repo-browser-container .status-card[onclick]:hover {
+    background: rgba(var(--accent-rgb, 99, 102, 241), 0.1);
+}
+
+/* Shelve View */
+.shelve-container .status-card {
+    transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.shelve-container .status-card:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+/* Commit Filter */
+.commit-view-container .log-filter-bar {
+    border-radius: 8px;
+}
+
+/* Log Revision Checkbox */
+.log-card .checkbox-container {
+    flex-shrink: 0;
+}
+
+/* Compare bar animation */
+.log-filter-bar[style*="accent"] {
+    animation: fadeIn 0.2s ease-out;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* =============================================
+   SVN Externals View
+   ============================================= */
+
+.externals-container {
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+/* =============================================
+   Drag & Drop Styles
+   ============================================= */
+
+.content-area.drag-over {
+    position: relative;
+}
+
+.drop-zone-active {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(99, 102, 241, 0.08);
+    border: 2px dashed var(--accent-primary);
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    pointer-events: none;
+    animation: dropZonePulse 1.5s ease-in-out infinite;
+}
+
+.drop-zone-message {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    color: var(--accent-primary);
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.drop-zone-icon {
+    font-size: 48px;
+}
+
+@keyframes dropZonePulse {
+    0%, 100% { border-color: var(--accent-primary); background: rgba(99, 102, 241, 0.08); }
+    50% { border-color: var(--accent-secondary); background: rgba(168, 85, 247, 0.08); }
+}
+
+/* Draggable cards */
+.status-card[draggable="true"] {
+    cursor: grab;
+}
+
+.status-card[draggable="true"]:active {
+    cursor: grabbing;
+}
+
+.status-card.dragging {
+    opacity: 0.4;
+    border: 1px dashed var(--accent-primary);
+    background: rgba(99, 102, 241, 0.05);
+}
+
+/* Drag ghost */
+.drag-ghost {
+    position: fixed;
+    top: -100px;
+    left: -100px;
+    padding: 6px 14px;
+    background: var(--accent-primary);
+    color: white;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 9999;
+}
+
+/* Tree drag & drop */
+.tree-node[draggable="true"] {
+    cursor: grab;
+}
+
+.tree-node.dragging {
+    opacity: 0.4;
+}
+
+.tree-node.tree-drop-target {
+    background: rgba(99, 102, 241, 0.15);
+    border-radius: 6px;
+    outline: 2px dashed var(--accent-primary);
+    outline-offset: -2px;
+}
+
+.tree-node.tree-drop-target .tree-name {
+    color: var(--accent-primary);
+    font-weight: 600;
+}
+
+/* === Welcome Screen === */
+.welcome-screen {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 80px 40px;
+    min-height: 400px;
+}
+
+.welcome-icon {
+    font-size: 64px;
+    margin-bottom: 16px;
+}
+
+.welcome-screen h2 {
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0 0 8px;
+}
+
+.welcome-subtitle {
+    color: var(--text-dim);
+    font-size: 15px;
+    margin: 0 0 40px;
+}
+
+.welcome-actions {
+    display: flex;
+    gap: 24px;
+    justify-content: center;
+    flex-wrap: wrap;
+}
+
+.btn-welcome {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 32px 40px;
+    border-radius: 16px;
+    border: 1px solid var(--border-color);
+    background: var(--card-bg, rgba(255, 255, 255, 0.04));
+    cursor: pointer;
+    transition: all 0.2s ease;
+    min-width: 220px;
+}
+
+.btn-welcome:hover {
+    background: rgba(99, 102, 241, 0.1);
+    border-color: var(--accent-primary);
+    transform: translateY(-2px);
+}
+
+.welcome-btn-icon {
+    font-size: 36px;
+}
+
+.welcome-btn-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.welcome-btn-desc {
+    font-size: 13px;
+    color: var(--text-dim);
+    line-height: 1.4;
+}

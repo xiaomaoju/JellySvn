@@ -9,7 +9,7 @@
     <link rel="stylesheet" href="style.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
     <meta name="description" content="JellySvn - A premium SVN GUI tool with seamless workflow.">
 </head>
 
@@ -21,62 +21,8 @@
                 <span class="logo-icon">🪼</span>
                 <span class="logo-text">JellySvn</span>
             </div>
-            <nav class="nav-menu">
-                <button class="nav-item active" id="btn-status">
-                    <span class="icon">📊</span> Status
-                </button>
-                <button class="nav-item" id="btn-update-all">
-                    <span class="icon">📥</span> Update All
-                </button>
-                <button class="nav-item" id="btn-commit-view">
-                    <span class="icon">📤</span> Commit
-                </button>
-                <button class="nav-item" id="btn-revert-view">
-                    <span class="icon">🔄</span> Revert
-                </button>
-                <button class="nav-item" id="btn-checkout">
-                    <span class="icon">🚀</span> Checkout
-                </button>
-                <button class="nav-item" id="btn-log">
-                    <span class="icon">📜</span> Log
-                </button>
-                <button class="nav-item" id="btn-tree">
-                    <span class="icon">📁</span> Tree
-                </button>
-                <button class="nav-item" id="btn-auth">
-                    <span class="icon">🔑</span> Auth
-                </button>
-                <button class="nav-item" id="btn-properties">
-                    <span class="icon">📋</span> Properties
-                </button>
-                <button class="nav-item" id="btn-branch">
-                    <span class="icon">🌿</span> Branch
-                </button>
-                <button class="nav-item" id="btn-lock">
-                    <span class="icon">🔒</span> Lock
-                </button>
-                <button class="nav-item" id="btn-blame">
-                    <span class="icon">👤</span> Blame
-                </button>
-                <button class="nav-item" id="btn-merge">
-                    <span class="icon">🔀</span> Merge
-                </button>
-                <button class="nav-item" id="btn-export">
-                    <span class="icon">📦</span> Export
-                </button>
-                <button class="nav-item" id="btn-search">
-                    <span class="icon">🔍</span> Search
-                </button>
-                <button class="nav-item" id="btn-ignore">
-                    <span class="icon">🚫</span> Ignore
-                </button>
-                <button class="nav-item" id="btn-tools">
-                    <span class="icon">🛠️</span> Tools
-                </button>
-                <div class="nav-spacer"></div>
-                <button class="nav-item" id="btn-settings">
-                    <span class="icon">⚙️</span> Settings
-                </button>
+            <nav class="nav-menu" id="nav-menu">
+                <!-- Sidebar rendered dynamically by renderSidebar() in app.js -->
             </nav>
             <div class="repo-info">
                 <h3>REPOSITORY</h3>
@@ -168,6 +114,7 @@
                 </div>
             </div>
             <div class="modal-footer">
+                <button class="btn-secondary" onclick="openExistingProject(); closeModal();">Open Existing Folder</button>
                 <button class="btn-secondary close-modal" onclick="closeModal()">Cancel</button>
                 <button class="btn-primary" id="btn-confirm-checkout">Checkout</button>
             </div>
@@ -230,38 +177,12 @@
         </div>
     </div>
 
-    <!-- Keyboard Shortcuts Modal -->
+    <!-- Keyboard Shortcuts Modal (dynamically rendered) -->
     <div id="shortcuts-modal" class="modal-overlay hidden">
-        <div class="modal-card shortcuts-modal-card">
-            <div class="modal-header">
-                <h2>Keyboard Shortcuts</h2>
-                <button class="close-modal" onclick="closeShortcutsModal()">×</button>
-            </div>
-            <div class="shortcuts-body">
-                <div class="shortcuts-section">
-                    <h3>Navigation</h3>
-                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>1</kbd><span>Status</span></div>
-                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>2</kbd><span>Commit</span></div>
-                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>3</kbd><span>Revert</span></div>
-                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>4</kbd><span>Log</span></div>
-                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>5</kbd><span>Tree</span></div>
-                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>6</kbd><span>Auth</span></div>
-                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>7</kbd><span>Properties</span></div>
-                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>8</kbd><span>Branch</span></div>
-                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>9</kbd><span>Settings</span></div>
-                </div>
-                <div class="shortcuts-section">
-                    <h3>Actions</h3>
-                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>R</kbd><span>Refresh</span></div>
-                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>U</kbd><span>Update All</span></div>
-                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>Enter</kbd><span>Commit (in commit view)</span></div>
-                    <div class="shortcut-row"><kbd>Escape</kbd><span>Close modals</span></div>
-                    <div class="shortcut-row"><kbd>?</kbd><span>Show this help</span></div>
-                </div>
-            </div>
-        </div>
+        <div class="modal-card shortcuts-modal-card" id="shortcuts-modal-content"></div>
     </div>
 
+    <script src="i18n.js"></script>
     <script src="app.js"></script>
 </body>
 

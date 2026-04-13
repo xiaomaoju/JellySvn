@@ -48,6 +48,9 @@ if [ -z "$SVN_ROOT" ]; then
     exit 0
 fi
 
+# Progress notification
+osascript -e "display notification \"Checking status...\" with title \"🔄 JellySvn\" subtitle \"$(basename "$FOLDER")\""
+
 # Run svn status on the selected folder
 STATUS_OUTPUT=$("$SVN" status "$FOLDER" 2>&1)
 EXIT_CODE=$?
@@ -82,4 +85,4 @@ SUMMARY=""
 [ "$MISSING" -gt 0 ] && SUMMARY="${SUMMARY}Missing: $MISSING\n"
 SUMMARY="${SUMMARY}\nTotal: $TOTAL files"
 
-osascript -e "display alert \"JELLYSVN Status — $(basename "$FOLDER")\" message \"$SUMMARY\""
+osascript -e "display notification \"$SUMMARY\" with title \"📊 SVN Status\" subtitle \"$(basename "$FOLDER")\""

@@ -13,6 +13,54 @@ let PROJECTS_FILE;
 let SETTINGS_FILE;
 let mainWindow;
 let fileWatcher = null;
+let pendingOpenArgs = null;
+
+// Parse command-line args: find folder path and --commit/--log flags
+function parseOpenArgs(argv) {
+    const args = argv.slice(app.isPackaged ? 1 : 2);
+    let folderPath = null;
+    let view = null;
+
+    for (const arg of args) {
+        if (arg === '--commit') {
+            view = 'commit-view';
+        } else if (arg === '--log') {
+            view = 'log';
+        } else if (!arg.startsWith('-')) {
+            try {
+                const resolved = path.resolve(arg);
+                if (fs.existsSync(resolved)) {
+                    folderPath = resolved;
+                }
+            } catch (e) { /* ignore */ }
+        }
+    }
+    return (folderPath || view) ? { folderPath, view } : null;
+}
+
+// Send open args to renderer when ready
+function sendOpenArgs(args) {
+    if (args && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('open-with-args', args);
+    }
+}
+
+// Single instance lock — if app is already running, focus it and pass new args
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+    app.quit();
+} else {
+    app.on('second-instance', (event, argv) => {
+        const args = parseOpenArgs(argv);
+        if (args) {
+            sendOpenArgs(args);
+        }
+        if (mainWindow) {
+            if (mainWindow.isMinimized()) mainWindow.restore();
+            mainWindow.focus();
+        }
+    });
+}
 
 function createWindow() {
     mainWindow = new BrowserWindow({
@@ -58,6 +106,15 @@ app.whenReady().then(() => {
     }
 
     createWindow();
+
+    // Parse initial command-line args (first launch)
+    pendingOpenArgs = parseOpenArgs(process.argv);
+    if (pendingOpenArgs) {
+        mainWindow.webContents.on('did-finish-load', () => {
+            sendOpenArgs(pendingOpenArgs);
+            pendingOpenArgs = null;
+        });
+    }
 });
 
 app.on('window-all-closed', () => {
@@ -404,6 +461,16 @@ ipcMain.handle('write-file', (event, filePath, content) => {
     }
 });
 
+// Copy file (for drag & drop)
+ipcMain.handle('copy-file', (event, srcPath, destPath) => {
+    try {
+        fs.copyFileSync(srcPath, destPath);
+        return { success: true };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+});
+
 // Open file dialog (for patch apply)
 ipcMain.handle('open-file-dialog', async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
@@ -420,7 +487,30 @@ ipcMain.handle('open-file-dialog', async () => {
     return { path: result.filePaths[0] };
 });
 
+// Open external diff tool
+ipcMain.handle('open-external-diff', (event, { tool, basePath, workingPath }) => {
+    const toolCommands = {
+        'opendiff': ['/usr/bin/opendiff', [basePath, workingPath]],
+        'vscode': ['code', ['--diff', basePath, workingPath]],
+        'bbedit': ['bbedit', ['--diff', basePath, workingPath]],
+        'kdiff3': ['kdiff3', [basePath, workingPath]]
+    };
+
+    const cmd = toolCommands[tool];
+    if (!cmd) return { success: false, error: `Unknown tool: ${tool}` };
+
+    try {
+        const proc = spawn(cmd[0], cmd[1], { detached: true, stdio: 'ignore' });
+        proc.unref();
+        return { success: true };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+});
+
 // Run SVN command
+const SVN_TIMEOUT_MS = 60000; // 60 second timeout for SVN commands
+
 ipcMain.handle('run-svn', (event, command, cwd, repoUrl) => {
     return new Promise((resolve) => {
         // Load auth credentials (decrypted)
@@ -488,6 +578,16 @@ ipcMain.handle('run-svn', (event, command, cwd, repoUrl) => {
 
         let stdout = '';
         let stderr = '';
+        let timedOut = false;
+
+        // Timeout to prevent infinite hang
+        const timeoutId = setTimeout(() => {
+            timedOut = true;
+            proc.kill('SIGTERM');
+            setTimeout(() => {
+                try { proc.kill('SIGKILL'); } catch (e) { /* already dead */ }
+            }, 3000);
+        }, SVN_TIMEOUT_MS);
 
         proc.stdout.on('data', (data) => {
             const chunk = data.toString();
@@ -506,6 +606,11 @@ ipcMain.handle('run-svn', (event, command, cwd, repoUrl) => {
         });
 
         proc.on('close', (code) => {
+            clearTimeout(timeoutId);
+            if (timedOut) {
+                resolve({ success: false, error: `SVN command timed out after ${SVN_TIMEOUT_MS / 1000}s. The server may be unreachable.` });
+                return;
+            }
             if (code === 0) {
                 resolve({ success: true, output: stdout });
             } else {
@@ -549,6 +654,7 @@ ipcMain.handle('run-svn', (event, command, cwd, repoUrl) => {
         });
 
         proc.on('error', (err) => {
+            clearTimeout(timeoutId);
             resolve({ success: false, error: err.message });
         });
     });

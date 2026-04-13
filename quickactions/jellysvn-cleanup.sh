@@ -46,7 +46,7 @@ if [ -z "$SVN_ROOT" ]; then
 fi
 
 # Progress notification
-osascript -e "display notification \"Running cleanup...\" with title \"JELLYSVN Cleanup\" subtitle \"$(basename "$SVN_ROOT")\""
+osascript -e "display notification \"Running cleanup...\" with title \"🔄 JellySvn\" subtitle \"$(basename "$SVN_ROOT")\""
 
 # Run svn cleanup on the SVN root
 CLEANUP_OUTPUT=$("$SVN" cleanup "$SVN_ROOT" 2>&1)
@@ -63,7 +63,7 @@ VACUUM_OUTPUT=$("$SVN" cleanup --vacuum-pristines "$SVN_ROOT" 2>&1)
 VACUUM_CODE=$?
 
 if [ $VACUUM_CODE -eq 0 ]; then
-    osascript -e "display alert \"JELLYSVN Cleanup — $(basename "$SVN_ROOT")\" message \"Cleanup and vacuum completed successfully.\""
+    osascript -e "display notification \"Cleanup and vacuum completed successfully.\" with title \"✅ SVN Cleanup Done\" subtitle \"$(basename "$SVN_ROOT")\""
 else
-    osascript -e "display alert \"JELLYSVN Cleanup — $(basename "$SVN_ROOT")\" message \"Cleanup completed successfully.\""
+    osascript -e "display notification \"Cleanup completed successfully.\" with title \"✅ SVN Cleanup Done\" subtitle \"$(basename "$SVN_ROOT")\""
 fi

@@ -29,7 +29,7 @@ mkdir -p "$SCRIPTS_DIR"
 
 # Copy shell scripts to Application Support
 echo "[2/4] Installing shell scripts..."
-for script in jellysvn-open.sh jellysvn-status.sh jellysvn-update.sh jellysvn-commit.sh jellysvn-cleanup.sh; do
+for script in jellysvn-open.sh jellysvn-status.sh jellysvn-update.sh jellysvn-commit.sh jellysvn-cleanup.sh jellysvn-log.sh; do
     if [ -f "$SCRIPT_DIR/$script" ]; then
         cp "$SCRIPT_DIR/$script" "$SCRIPTS_DIR/$script"
         chmod +x "$SCRIPTS_DIR/$script"
@@ -56,6 +56,42 @@ create_workflow() {
     mkdir -p "$CONTENTS_DIR"
 
     local SCRIPT_PATH="$SCRIPTS_DIR/$SCRIPT_NAME"
+
+    # Generate a unique bundle identifier
+    local BUNDLE_ID="com.jellysvn.quickaction.$(echo "$SERVICE_NAME" | tr ' ' '-' | tr '[:upper:]' '[:lower:]')"
+
+    # Create Info.plist (required for macOS to recognize the Quick Action)
+    cat > "$CONTENTS_DIR/Info.plist" << INFOPLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>${BUNDLE_ID}</string>
+	<key>NSServices</key>
+	<array>
+		<dict>
+			<key>NSMenuItem</key>
+			<dict>
+				<key>default</key>
+				<string>${SERVICE_NAME}</string>
+			</dict>
+			<key>NSMessage</key>
+			<string>runWorkflowAsService</string>
+			<key>NSRequiredContext</key>
+			<dict>
+				<key>NSApplicationIdentifier</key>
+				<string>com.apple.finder</string>
+			</dict>
+			<key>NSSendFileTypes</key>
+			<array>
+				<string>public.item</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>
+INFOPLIST
 
     # Create the document.wflow XML plist
     cat > "$CONTENTS_DIR/document.wflow" << 'PLIST_HEADER'
@@ -305,13 +341,14 @@ create_workflow "JellySvn - SVN Status"  "jellysvn-status.sh"  "Show SVN status 
 create_workflow "JellySvn - SVN Update"  "jellysvn-update.sh"  "Run svn update on selected folder"
 create_workflow "JellySvn - Commit"      "jellysvn-commit.sh"  "Open JellySvn commit view"
 create_workflow "JellySvn - SVN Cleanup" "jellysvn-cleanup.sh" "Run svn cleanup on selected folder"
+create_workflow "JellySvn - SVN Log"     "jellysvn-log.sh"     "Show recent SVN log entries"
 
 echo ""
 echo "[4/4] Verifying installation..."
 
 INSTALLED=0
 FAILED=0
-for wf in "Open in JellySvn" "JellySvn - SVN Status" "JellySvn - SVN Update" "JellySvn - Commit" "JellySvn - SVN Cleanup"; do
+for wf in "Open in JellySvn" "JellySvn - SVN Status" "JellySvn - SVN Update" "JellySvn - Commit" "JellySvn - SVN Cleanup" "JellySvn - SVN Log"; do
     if [ -f "$SERVICES_DIR/${wf}.workflow/Contents/document.wflow" ]; then
         INSTALLED=$((INSTALLED + 1))
     else

@@ -3,7 +3,7 @@
 ## 프로젝트 개요
 - **Name**: JellySvn (SVN Antigravity)
 - **Goal**: Premium SVN GUI Client (Electron Desktop App)
-- **Status**: Sprint 5 Features Complete — 6개 핵심 SVN 기능 추가 완료 (2026-02-16)
+- **Status**: Sprint 7 Complete — i18n, SVN Externals, Drag & Drop (2026-03-05)
 
 ## 컴포넌트 맵
 - **Frontend**: Vanilla JS (app.js), Vanilla CSS (style.css), HTML5 (index.html)
@@ -51,6 +51,19 @@
 - [x] SVN Relocate: change repository URL (svn relocate) with auto-detect
 - [x] SVN Changelist: organize files into named groups (svn changelist), commit per changelist
 - [x] Sidebar scroll: scrollable navigation menu for many items
+- [x] Update to Revision: update working copy to specific revision (svn update -r REV)
+- [x] Revert to Revision: revert to/undo specific revision via Log view (svn merge)
+- [x] Compare two Revisions: select 2 revisions in Log view and diff them
+- [x] Repository Browser: browse remote SVN repository (svn list), copy to for branch/tag
+- [x] Shelve/Unshelve: temporarily save/restore changes (svn shelve/unshelve + patch fallback)
+- [x] External Diff Tool: settings for FileMerge, VS Code, BBEdit, KDiff3 (IPC handler)
+- [x] Commit view file filtering: search/filter files in commit view by name/path
+- [x] Status view Ignore button: quick-add untracked files to svn:ignore from status
+- [x] Working Copy Upgrade: upgrade older SVN working copy format (svn upgrade)
+- [x] Remote URL Log: view svn log from remote URL without checkout
+- [x] i18n: Multi-language support (English/한국어), dynamic sidebar, t() function, language settings
+- [x] SVN Externals: svn:externals management (view/add/edit/remove/raw edit/update)
+- [x] Drag & Drop: external file drop to add, card drag selection, tree view svn move
 
 ## 에이전트 팀 역할 (R&R)
 
@@ -112,12 +125,22 @@
 - ~~SVN Changelist (svn changelist, commit per changelist)~~ ✅ 완료
 - ~~Sidebar scroll (scrollable navigation menu)~~ ✅ 완료
 
-**향후 개발 (New Backlog):**
-- Stash/Shelve functionality (로컬 변경 임시 저장)
-- Multi-language support (i18n)
-- SVN Externals management
-- Repository browser (remote)
-- Drag & Drop file operations
+**Sprint 6 (완료 — SnailSVN 기능 비교 기반):**
+- ~~Update to Revision (svn update -r REV, Tools 뷰)~~ ✅ 완료
+- ~~Revert to Revision (svn merge -r HEAD:REV, Log 뷰)~~ ✅ 완료
+- ~~Compare two Revisions (svn diff -r REV1:REV2, Log 뷰 체크박스)~~ ✅ 완료
+- ~~Repository Browser (svn list URL, 원격 탐색 + Copy to)~~ ✅ 완료
+- ~~Shelve/Unshelve (svn shelve/unshelve + 패치 기반 fallback)~~ ✅ 완료
+- ~~External Diff Tool 설정 (FileMerge, VS Code, BBEdit, KDiff3)~~ ✅ 완료
+- ~~Commit 뷰 파일 필터링 (파일명/경로 검색)~~ ✅ 완료
+- ~~Status 뷰에서 Ignore 추가 (untracked 파일 → svn:ignore)~~ ✅ 완료
+- ~~SVN Working Copy Upgrade (svn upgrade, Tools 뷰)~~ ✅ 완료
+- ~~Remote URL Log 조회 (체크아웃 없이 원격 URL 로그)~~ ✅ 완료
+
+**Sprint 7 (완료 — v1.1.0):**
+- ~~Multi-language support (i18n: 한국어/English, dynamic sidebar, t() 함수)~~ ✅ 완료
+- ~~SVN Externals management (svn:externals 조회/추가/수정/삭제/Raw편집)~~ ✅ 완료
+- ~~Drag & Drop file operations (외부 파일 드롭, 카드 드래그 선택, Tree 뷰 이동)~~ ✅ 완료
 
 ## SVN 표준 운영 절차 (SOP)
 

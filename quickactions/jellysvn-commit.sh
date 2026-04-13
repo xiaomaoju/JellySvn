@@ -1,8 +1,8 @@
 #!/bin/bash
 # jellysvn-commit.sh
 # Opens JELLYSVN and navigates to the commit view for the selected folder.
+# Optimized: opens app immediately, skips pre-check for faster launch.
 
-SVN="/opt/homebrew/bin/svn"
 FOLDER="$1"
 
 if [ -z "$FOLDER" ]; then
@@ -17,14 +17,6 @@ fi
 if [ ! -d "$FOLDER" ]; then
     osascript -e "display alert \"JELLYSVN Commit\" message \"Path is not a directory.\" as warning"
     exit 0
-fi
-
-if [ ! -x "$SVN" ]; then
-    SVN="$(which svn 2>/dev/null)"
-    if [ -z "$SVN" ]; then
-        osascript -e 'display alert "JELLYSVN Commit" message "SVN not found. Install with: brew install svn" as warning'
-        exit 0
-    fi
 fi
 
 find_svn_root() {
@@ -45,20 +37,13 @@ if [ -z "$SVN_ROOT" ]; then
     exit 0
 fi
 
-# Check if there are any changes to commit
-STATUS_OUTPUT=$("$SVN" status "$SVN_ROOT" 2>&1)
-COMMITTABLE=$(echo "$STATUS_OUTPUT" | grep -cE "^[MADR]")
-
-if [ "$COMMITTABLE" -eq 0 ]; then
-    osascript -e "display alert \"JELLYSVN Commit — $(basename "$SVN_ROOT")\" message \"No changes to commit.\" as informational"
-    exit 0
-fi
-
 # Possible app locations
 APP_PATHS=(
+    "/Applications/JellySvn.app"
     "/Applications/SVN Antigravity.app"
     "/Applications/JELLYSVN.app"
     "/Applications/SVN GUI Tool.app"
+    "$HOME/Applications/JellySvn.app"
     "$HOME/Applications/SVN Antigravity.app"
     "$HOME/Applications/JELLYSVN.app"
 )
@@ -76,6 +61,8 @@ if [ -z "$APP_PATH" ]; then
     exit 0
 fi
 
+# Open app immediately — no svn status pre-check (app handles it internally)
 open -a "$APP_PATH" --args "$SVN_ROOT" --commit
 
-osascript -e "display alert \"JELLYSVN Commit — $(basename "$SVN_ROOT")\" message \"Opening commit view ($COMMITTABLE files ready)\""
+# Non-blocking notification instead of blocking alert
+osascript -e "display notification \"Opening commit view for $(basename "$SVN_ROOT")\" with title \"JellySvn\""

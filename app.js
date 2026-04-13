@@ -52,8 +52,14 @@ const state = {
         logLimit: 20,
         autoRefresh: false,
         autoRefreshInterval: 5000,
-        theme: 'dark'
+        theme: 'dark',
+        language: 'en'
     },
+
+    // Externals
+    externals: [],
+    externalsTarget: '.',
+    externalsRawMode: false,
 
     // File watcher
     watcherActive: false,
@@ -85,7 +91,20 @@ const state = {
     changelists: {},
 
     // Patch
-    patchContent: ''
+    patchContent: '',
+
+    // Commit filter
+    commitFilter: '',
+
+    // Shelve
+    shelveList: [],
+
+    // Repo browser
+    repoBrowserPath: '',
+    repoBrowserEntries: [],
+
+    // Log compare
+    logSelectedRevisions: new Set()
 };
 
 // UI Elements
@@ -93,7 +112,7 @@ const elements = {
     contentArea: document.getElementById('main-view'),
     pageTitle: document.getElementById('page-title'),
     consoleLog: document.getElementById('console-log'),
-    navItems: document.querySelectorAll('.nav-item'),
+    navMenu: document.getElementById('nav-menu'),
     refreshBtn: document.getElementById('btn-refresh'),
     bulkActions: document.getElementById('bulk-actions'),
     selectedCount: document.getElementById('selected-count'),
@@ -112,10 +131,13 @@ const elements = {
 // Initialize
 async function init() {
     await loadSettings();
+    initLanguage(state.settings.language);
+    renderSidebar();
     bindEvents();
     bindSvnOutputStream();
     bindFileWatcher();
     bindKeyboardShortcuts();
+    bindOpenWithArgs();
     await loadProjects();
 
     // Add scroll shadow indicator to nav-menu
@@ -133,6 +155,68 @@ async function init() {
             }
         }, 100);
     }
+
+    // Signal init complete — process any queued open-with-args
+    onInitComplete();
+}
+
+// === Dynamic Sidebar Rendering ===
+function renderSidebar() {
+    const navItems = [
+        { id: 'btn-status', icon: '📊', key: 'nav.status', active: true },
+        { id: 'btn-update-all', icon: '📥', key: 'nav.updateAll' },
+        { id: 'btn-commit-view', icon: '📤', key: 'nav.commit' },
+        { id: 'btn-revert-view', icon: '🔄', key: 'nav.revert' },
+        { id: 'btn-checkout', icon: '🚀', key: 'nav.checkout' },
+        { id: 'btn-log', icon: '📜', key: 'nav.log' },
+        { id: 'btn-tree', icon: '📁', key: 'nav.tree' },
+        { id: 'btn-auth', icon: '🔑', key: 'nav.auth' },
+        { id: 'btn-properties', icon: '📋', key: 'nav.properties' },
+        { id: 'btn-branch', icon: '🌿', key: 'nav.branch' },
+        { id: 'btn-externals', icon: '🔗', key: 'nav.externals' },
+        { id: 'btn-lock', icon: '🔒', key: 'nav.lock' },
+        { id: 'btn-blame', icon: '👤', key: 'nav.blame' },
+        { id: 'btn-merge', icon: '🔀', key: 'nav.merge' },
+        { id: 'btn-export', icon: '📦', key: 'nav.export' },
+        { id: 'btn-search', icon: '🔍', key: 'nav.search' },
+        { id: 'btn-ignore', icon: '🚫', key: 'nav.ignore' },
+        { id: 'btn-repo-browser', icon: '🌐', key: 'nav.repoBrowser' },
+        { id: 'btn-shelve', icon: '📌', key: 'nav.shelve' },
+        { id: 'btn-tools', icon: '🛠️', key: 'nav.tools' },
+        { type: 'spacer' },
+        { id: 'btn-settings', icon: '⚙️', key: 'nav.settings' },
+    ];
+
+    let html = '';
+    for (const item of navItems) {
+        if (item.type === 'spacer') {
+            html += '<div class="nav-spacer"></div>';
+            continue;
+        }
+        const activeView = state.currentView;
+        const viewName = item.id.replace('btn-', '');
+        const isActive = (viewName === activeView) || (item.active && activeView === 'status' && viewName === 'status');
+        html += `<button class="nav-item${isActive ? ' active' : ''}" id="${item.id}">
+            <span class="icon">${item.icon}</span> ${t(item.key)}
+        </button>`;
+    }
+
+    elements.navMenu.innerHTML = html;
+    bindNavEvents();
+}
+
+function bindNavEvents() {
+    const navButtons = elements.navMenu.querySelectorAll('.nav-item');
+    navButtons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            navButtons.forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            const view = btn.id.replace('btn-', '');
+            if (view === 'update-all') runSvn(['update']);
+            else if (view === 'checkout') elements.checkoutModal.classList.remove('hidden');
+            else switchView(view);
+        });
+    });
 }
 
 async function loadSettings() {
@@ -204,6 +288,71 @@ async function stopWatcher() {
         logToConsole('File watcher stopped.', 'system');
     } catch (err) {
         // ignore
+    }
+}
+
+// === Open With Args (Finder Quick Actions / command-line) ===
+let _initComplete = false;
+let _pendingOpenArgs = null;
+
+function bindOpenWithArgs() {
+    if (!window.api.onOpenWithArgs) return;
+    window.api.onOpenWithArgs((args) => {
+        if (_initComplete) {
+            handleOpenWithArgs(args);
+        } else {
+            // Queue until init() completes
+            _pendingOpenArgs = args;
+        }
+    });
+}
+
+function onInitComplete() {
+    _initComplete = true;
+    if (_pendingOpenArgs) {
+        handleOpenWithArgs(_pendingOpenArgs);
+        _pendingOpenArgs = null;
+    }
+}
+
+async function handleOpenWithArgs(args) {
+    logToConsole(`Open request: ${JSON.stringify(args)}`, 'system');
+
+    if (args.folderPath) {
+        // Wait for any in-progress operation
+        if (state.currentOperation) await waitForOperation();
+
+        const existingIndex = state.projects.findIndex(p => p.path === args.folderPath);
+
+        if (existingIndex >= 0) {
+            selectProject(existingIndex);
+            logToConsole(`Switched to project: ${state.projects[existingIndex].name}`, 'success');
+        } else {
+            const folderName = args.folderPath.split('/').pop() || 'Untitled Project';
+            const valData = await window.api.validateRepo(args.folderPath);
+
+            let repoUrl = '';
+            if (valData.isValid) {
+                try {
+                    const infoResult = await window.api.runSvn(['info'], args.folderPath, null);
+                    if (infoResult.success) {
+                        const urlMatch = infoResult.output.match(/^URL:\s*(.+)$/m);
+                        if (urlMatch) repoUrl = urlMatch[1].trim();
+                    }
+                } catch (e) { /* ignore */ }
+            }
+
+            await window.api.saveProject({ name: folderName, path: args.folderPath, url: repoUrl });
+            await loadProjects();
+            logToConsole(`Added project from Finder: ${folderName}`, 'success');
+        }
+
+        // Wait for refreshStatus to complete before switching view
+        if (state.currentOperation || state.isScanning) await waitForOperation();
+    }
+
+    if (args.view) {
+        await switchView(args.view);
     }
 }
 
@@ -283,12 +432,42 @@ function bindKeyboardShortcuts() {
 
 function activateNavButton(view) {
     const btnId = `btn-${view}`;
-    elements.navItems.forEach(b => b.classList.remove('active'));
+    elements.navMenu.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
     const btn = document.getElementById(btnId);
     if (btn) btn.classList.add('active');
 }
 
 function openShortcutsModal() {
+    const container = document.getElementById('shortcuts-modal-content');
+    if (container) {
+        container.innerHTML = `
+            <div class="modal-header">
+                <h2>${t('modal.keyboardShortcuts')}</h2>
+                <button class="close-modal" onclick="closeShortcutsModal()">×</button>
+            </div>
+            <div class="shortcuts-body">
+                <div class="shortcuts-section">
+                    <h3>${t('shortcuts.navigation')}</h3>
+                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>1</kbd><span>${t('shortcuts.status')}</span></div>
+                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>2</kbd><span>${t('shortcuts.commit')}</span></div>
+                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>3</kbd><span>${t('shortcuts.revert')}</span></div>
+                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>4</kbd><span>${t('shortcuts.log')}</span></div>
+                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>5</kbd><span>${t('shortcuts.tree')}</span></div>
+                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>6</kbd><span>${t('shortcuts.auth')}</span></div>
+                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>7</kbd><span>${t('shortcuts.properties')}</span></div>
+                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>8</kbd><span>${t('shortcuts.branch')}</span></div>
+                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>9</kbd><span>${t('shortcuts.settings')}</span></div>
+                </div>
+                <div class="shortcuts-section">
+                    <h3>${t('shortcuts.actions')}</h3>
+                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>R</kbd><span>${t('shortcuts.refresh')}</span></div>
+                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>U</kbd><span>${t('shortcuts.updateAll')}</span></div>
+                    <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>Enter</kbd><span>${t('shortcuts.commitInView')}</span></div>
+                    <div class="shortcut-row"><kbd>Escape</kbd><span>${t('shortcuts.closeModals')}</span></div>
+                    <div class="shortcut-row"><kbd>?</kbd><span>${t('shortcuts.showHelp')}</span></div>
+                </div>
+            </div>`;
+    }
     elements.shortcutsModal.classList.remove('hidden');
 }
 
@@ -305,6 +484,36 @@ function closeModal() {
 function closeDiffModal() {
     elements.diffModal.classList.add('hidden');
     elements.diffContent.innerHTML = '';
+}
+
+async function openExistingProject() {
+    logToConsole('Selecting directory...', 'system');
+    const data = await window.api.browseFolder();
+    if (!data.path) return;
+
+    const cleanPath = data.path.replace(/\/+$/, '');
+    const folderName = cleanPath.split('/').pop() || 'Untitled Project';
+    const valData = await window.api.validateRepo(cleanPath);
+
+    if (!valData.isValid) {
+        if (!confirm(t('welcome.notSvnConfirm', { name: folderName }))) return;
+    }
+
+    // Auto-detect URL via svn info
+    let repoUrl = '';
+    if (valData.isValid) {
+        try {
+            const infoResult = await window.api.runSvn(['info'], cleanPath, null);
+            if (infoResult.success) {
+                const urlMatch = infoResult.output.match(/^URL:\s*(.+)$/m);
+                if (urlMatch) repoUrl = urlMatch[1].trim();
+            }
+        } catch (e) { /* ignore */ }
+    }
+
+    await window.api.saveProject({ name: folderName, path: cleanPath, url: repoUrl });
+    await loadProjects();
+    logToConsole(`Added project: ${folderName}`, 'success');
 }
 
 async function loadProjects() {
@@ -374,16 +583,7 @@ function renderTabs() {
 }
 
 function bindEvents() {
-    elements.navItems.forEach(btn => {
-        btn.addEventListener('click', () => {
-            elements.navItems.forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            const view = btn.id.replace('btn-', '');
-            if (view === 'update-all') runSvn(['update']);
-            else if (view === 'checkout') elements.checkoutModal.classList.remove('hidden');
-            else switchView(view);
-        });
-    });
+    // Nav events are bound in renderSidebar() → bindNavEvents()
 
     elements.refreshBtn.addEventListener('click', () => {
         if (state.currentView === 'log') {
@@ -405,6 +605,8 @@ function bindEvents() {
             if (state.searchQuery) executeSearch();
         } else if (state.currentView === 'ignore') {
             fetchIgnorePatterns();
+        } else if (state.currentView === 'externals') {
+            fetchExternals();
         } else {
             refreshStatus();
         }
@@ -470,27 +672,7 @@ function bindEvents() {
     });
 
     // Sidebar Browse button
-    document.getElementById('btn-browse').addEventListener('click', async () => {
-        logToConsole('Selecting directory...', 'system');
-        const data = await window.api.browseFolder();
-        if (data.path) {
-            const cleanPath = data.path.replace(/\/+$/, '');
-            const folderName = cleanPath.split('/').pop() || 'Untitled Project';
-
-            // Validate if it's an SVN repo
-            const valData = await window.api.validateRepo(data.path);
-
-            if (!valData.isValid) {
-                if (!confirm(`Warning: '${folderName}' is not a valid SVN working copy.\nDo you want to add it anyway? (You can use 'Checkout' later)`)) {
-                    return;
-                }
-            }
-
-            await window.api.saveProject({ name: folderName, path: data.path, url: '' });
-            await loadProjects();
-            logToConsole(`Added project: ${folderName}`, 'success');
-        }
-    });
+    document.getElementById('btn-browse').addEventListener('click', () => openExistingProject());
 
     // Auth Modal
     document.getElementById('btn-save-auth').addEventListener('click', async () => {
@@ -525,40 +707,49 @@ async function openNativeDirPicker() {
     }
 }
 
-function switchView(view) {
+async function switchView(view) {
     state.currentView = view;
-    const titles = {
-        'status': 'Working Copy Status',
-        'log': 'Commit History',
-        'commit-view': 'Commit Changes',
-        'revert-view': 'Revert Changes',
-        'auth': 'Auth Manager',
-        'tree': 'Project Tree',
-        'properties': 'SVN Properties',
-        'branch': 'Branch / Tag Manager',
-        'lock': 'Lock Manager',
-        'blame': 'Blame / Annotate',
-        'merge': 'Merge',
-        'export': 'Export / Import / Patch',
-        'search': 'Search Repository',
-        'ignore': 'Ignore Management',
-        'tools': 'Tools',
-        'settings': 'Settings'
+    const titleKeys = {
+        'status': 'view.status',
+        'log': 'view.log',
+        'commit-view': 'view.commitView',
+        'revert-view': 'view.revertView',
+        'auth': 'view.auth',
+        'tree': 'view.tree',
+        'properties': 'view.properties',
+        'branch': 'view.branch',
+        'lock': 'view.lock',
+        'blame': 'view.blame',
+        'merge': 'view.merge',
+        'export': 'view.export',
+        'search': 'view.search',
+        'ignore': 'view.ignore',
+        'tools': 'view.tools',
+        'repo-browser': 'view.repoBrowser',
+        'shelve': 'view.shelve',
+        'settings': 'view.settings',
+        'externals': 'view.externals'
     };
-    elements.pageTitle.textContent = titles[view] || view.charAt(0).toUpperCase() + view.slice(1);
+    elements.pageTitle.textContent = titleKeys[view] ? t(titleKeys[view]) : view.charAt(0).toUpperCase() + view.slice(1);
+    // Update sidebar active state
+    if (elements.navMenu) {
+        elements.navMenu.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+        const activeBtn = document.getElementById('btn-' + view);
+        if (activeBtn) activeBtn.classList.add('active');
+    }
     if (view === 'log') {
         state.logPage = 1;
-        fetchLog();
+        await fetchLog();
     } else if (view === 'auth') {
-        fetchAuthEntries();
+        await fetchAuthEntries();
     } else if (view === 'tree') {
-        fetchTree();
+        await fetchTree();
     } else if (view === 'properties') {
-        fetchProperties();
+        await fetchProperties();
     } else if (view === 'branch') {
-        fetchBranchInfo();
+        await fetchBranchInfo();
     } else if (view === 'lock') {
-        fetchLockStatus();
+        await fetchLockStatus();
     } else if (view === 'blame') {
         renderBlameView();
     } else if (view === 'merge') {
@@ -568,7 +759,13 @@ function switchView(view) {
     } else if (view === 'search') {
         render();
     } else if (view === 'ignore') {
-        fetchIgnorePatterns();
+        await fetchIgnorePatterns();
+    } else if (view === 'externals') {
+        await fetchExternals();
+    } else if (view === 'repo-browser') {
+        render();
+    } else if (view === 'shelve') {
+        await fetchShelveList();
     } else if (view === 'tools') {
         render();
     } else {
@@ -582,46 +779,58 @@ function logToConsole(message, type = 'system') {
     const time = new Date().toLocaleTimeString([], { hour12: false });
     entry.textContent = `[${time}] ${message}`;
     elements.consoleLog.appendChild(entry);
+    // Limit console entries to prevent memory bloat during long sessions
+    while (elements.consoleLog.children.length > 500) {
+        elements.consoleLog.removeChild(elements.consoleLog.firstChild);
+    }
     elements.consoleLog.scrollTop = elements.consoleLog.scrollHeight;
 }
 
 function getOperationLabel(cmd) {
-    const labels = {
-        'checkout': 'Checking out repository...',
-        'update': 'Updating files...',
-        'commit': 'Committing changes...',
-        'revert': 'Reverting changes...',
-        'add': 'Adding files...',
-        'delete': 'Deleting files...',
-        'resolve': 'Resolving conflicts...',
-        'status': 'Scanning status...',
-        'info': 'Fetching info...',
-        'log': 'Fetching log...',
-        'diff': 'Loading diff...',
-        'proplist': 'Loading properties...',
-        'propget': 'Reading property...',
-        'propset': 'Setting property...',
-        'propdel': 'Deleting property...',
-        'ls': 'Listing...',
-        'copy': 'Copying...',
-        'switch': 'Switching branch...',
-        'lock': 'Locking file...',
-        'unlock': 'Unlocking file...',
-        'blame': 'Loading blame data...',
-        'merge': 'Merging...',
-        'export': 'Exporting...',
-        'import': 'Importing...',
-        'cleanup': 'Cleaning up...',
-        'move': 'Moving/Renaming...',
-        'relocate': 'Relocating...',
-        'changelist': 'Updating changelist...',
-        'patch': 'Applying patch...'
+    const labelKeys = {
+        'checkout': 'op.checkingOut',
+        'update': 'op.updating',
+        'commit': 'op.committing',
+        'revert': 'op.reverting',
+        'add': 'op.adding',
+        'delete': 'op.deleting',
+        'resolve': 'op.resolving',
+        'status': 'op.scanning',
+        'info': 'op.fetchingInfo',
+        'log': 'op.fetchingLog',
+        'diff': 'op.loadingDiff',
+        'proplist': 'op.loadingProps',
+        'propget': 'op.readingProp',
+        'propset': 'op.settingProp',
+        'propdel': 'op.deletingProp',
+        'ls': 'op.listing',
+        'copy': 'op.copying',
+        'switch': 'op.switching',
+        'lock': 'op.locking',
+        'unlock': 'op.unlocking',
+        'blame': 'op.loadingBlame',
+        'merge': 'op.merging',
+        'export': 'op.exporting',
+        'import': 'op.importing',
+        'cleanup': 'op.cleaning',
+        'move': 'op.moving',
+        'relocate': 'op.relocating',
+        'changelist': 'op.processing',
+        'patch': 'op.patching',
+        'upgrade': 'op.upgrading',
+        'shelve': 'op.shelving',
+        'unshelve': 'op.unshelving'
     };
-    return labels[cmd] || `Running svn ${cmd}...`;
+    return labelKeys[cmd] ? t(labelKeys[cmd]) : `Running svn ${cmd}...`;
 }
+
+let _operationSafetyTimer = null;
+let _operationElapsedTimer = null;
+let _operationStartTime = 0;
 
 function showOperation(label) {
     state.currentOperation = label;
+    _operationStartTime = Date.now();
     const overlay = document.getElementById('operation-overlay');
     const labelEl = document.getElementById('operation-label');
     if (overlay && labelEl) {
@@ -629,10 +838,33 @@ function showOperation(label) {
         overlay.classList.remove('hidden');
     }
     document.querySelector('.app-container').classList.add('operation-active');
+
+    // Auto-expand console panel so user can see real-time SVN output
+    expandConsolePanel();
+
+    // Show elapsed time on overlay after 2 seconds
+    clearInterval(_operationElapsedTimer);
+    _operationElapsedTimer = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - _operationStartTime) / 1000);
+        if (labelEl && state.currentOperation) {
+            labelEl.textContent = `${state.currentOperation} (${elapsed}s)`;
+        }
+    }, 1000);
+
+    // Safety timeout: auto-hide overlay after 90s to prevent permanent stuck state
+    clearTimeout(_operationSafetyTimer);
+    _operationSafetyTimer = setTimeout(() => {
+        if (state.currentOperation) {
+            logToConsole(`Operation "${state.currentOperation}" timed out. UI unlocked.`, 'warning');
+            hideOperation();
+        }
+    }, 90000);
 }
 
 function hideOperation() {
     state.currentOperation = null;
+    clearTimeout(_operationSafetyTimer);
+    clearInterval(_operationElapsedTimer);
     const overlay = document.getElementById('operation-overlay');
     if (overlay) {
         overlay.classList.add('hidden');
@@ -641,7 +873,10 @@ function hideOperation() {
 }
 
 async function runSvn(command, url = null) {
-    if (state.currentOperation) return false;
+    if (state.currentOperation) {
+        logToConsole(`Busy: "${state.currentOperation}" in progress. Please wait.`, 'warning');
+        return false;
+    }
 
     // checkout 명령은 cwd 불필요 (새 경로에 체크아웃하므로)
     const isCheckout = command[0] === 'checkout';
@@ -655,8 +890,17 @@ async function runSvn(command, url = null) {
         const result = await window.api.runSvn(command, cwd, finalUrl);
 
         if (result.success) {
+            // Show detailed output for update commands
+            if (command[0] === 'update' && result.output) {
+                const lines = result.output.trim().split('\n').filter(l => l.trim());
+                for (const line of lines) {
+                    logToConsole(line, 'success');
+                }
+            }
             logToConsole('Command completed successfully.', 'success');
             hideOperation();
+            // Auto-expand console panel for update commands
+            if (command[0] === 'update') expandConsolePanel();
             if (!isCheckout) refreshStatus();
             return true;
         } else {
@@ -681,8 +925,20 @@ async function runSvn(command, url = null) {
     }
 }
 
+function expandConsolePanel() {
+    const panel = document.querySelector('.bottom-panel');
+    const icon = document.getElementById('console-toggle-icon');
+    if (panel && panel.classList.contains('collapsed')) {
+        panel.classList.remove('collapsed');
+        if (icon) icon.textContent = '▼';
+    }
+}
+
 async function deleteFile(path) {
-    if (state.currentOperation) return;
+    if (state.currentOperation) {
+        logToConsole(`Busy: "${state.currentOperation}" in progress. Please wait.`, 'warning');
+        return;
+    }
 
     const cwd = state.selectedProjectIndex >= 0 ? state.projects[state.selectedProjectIndex].path : null;
     showOperation('Deleting file...');
@@ -737,12 +993,21 @@ async function refreshStatus() {
             });
         } else {
             state.workingCopy = [];
-            if (result.error.includes('Authentication')) runSvn(['status'], project.url);
+            // Auth retry: store intent, will retry after hideOperation in finally
+            if (result.error && result.error.includes('Authentication')) {
+                state._authRetryUrl = project.url;
+            }
         }
     } finally {
         state.isScanning = false;
         hideOperation();
         render();
+        // Retry auth after operation is cleared
+        if (state._authRetryUrl) {
+            const retryUrl = state._authRetryUrl;
+            state._authRetryUrl = null;
+            runSvn(['status'], retryUrl);
+        }
     }
 }
 
@@ -772,11 +1037,32 @@ function openCommitModal() {
 
 function render() {
     if (state.selectedProjectIndex === -1 && state.projects.length === 0) {
-        elements.contentArea.innerHTML = `<div class="empty-state"><p>No projects yet. Click + to Checkout a new project.</p></div>`;
+        elements.contentArea.innerHTML = `
+            <div class="welcome-screen">
+                <div class="welcome-icon">🪼</div>
+                <h2>${t('welcome.title')}</h2>
+                <p class="welcome-subtitle">${t('welcome.subtitle')}</p>
+                <div class="welcome-actions">
+                    <button class="btn-welcome" id="btn-welcome-open">
+                        <span class="welcome-btn-icon">📂</span>
+                        <span class="welcome-btn-title">${t('welcome.openExisting')}</span>
+                        <span class="welcome-btn-desc">${t('welcome.openExistingDesc')}</span>
+                    </button>
+                    <button class="btn-welcome" id="btn-welcome-checkout">
+                        <span class="welcome-btn-icon">⬇️</span>
+                        <span class="welcome-btn-title">${t('welcome.checkout')}</span>
+                        <span class="welcome-btn-desc">${t('welcome.checkoutDesc')}</span>
+                    </button>
+                </div>
+            </div>`;
+        document.getElementById('btn-welcome-open')?.addEventListener('click', openExistingProject);
+        document.getElementById('btn-welcome-checkout')?.addEventListener('click', () => {
+            elements.checkoutModal.classList.remove('hidden');
+        });
         return;
     }
     if (state.isScanning) {
-        elements.contentArea.innerHTML = `<div class="empty-state"><div class="loading-spinner"></div><p>Syncing...</p></div>`;
+        elements.contentArea.innerHTML = `<div class="empty-state"><div class="loading-spinner"></div><p>${t('msg.syncing')}</p></div>`;
         return;
     }
     switch (state.currentView) {
@@ -825,17 +1111,26 @@ function render() {
         case 'tools':
             renderToolsView();
             break;
+        case 'repo-browser':
+            renderRepoBrowser();
+            break;
+        case 'shelve':
+            renderShelveView();
+            break;
+        case 'externals':
+            renderExternalsView();
+            break;
         case 'settings':
             renderSettings();
             break;
         default:
-            elements.contentArea.innerHTML = `<div class="empty-state"><p>View not found.</p></div>`;
+            elements.contentArea.innerHTML = `<div class="empty-state"><p>${t('msg.viewNotFound')}</p></div>`;
     }
 }
 
 function renderStatus() {
     if (state.workingCopy.length === 0) {
-        elements.contentArea.innerHTML = `<div class="empty-state"><p>Workspace is clean.</p></div>`;
+        elements.contentArea.innerHTML = `<div class="empty-state"><p>${t('msg.workspaceClean')}</p></div>`;
         return;
     }
     let html = '<div class="status-list">';
@@ -855,7 +1150,11 @@ function renderStatus() {
                 <div class="file-actions" onclick="event.stopPropagation()">
                     ${file.status === 'untracked' ?
                 `<button class="btn-primary" onclick="runSvn(['add', '${ep}'])">Add</button>
+                         <button class="btn-secondary" onclick="quickAddIgnoreFromStatus('${ep}')">Ignore</button>
                          <button class="btn-secondary" onclick="if(confirm('Delete ${ep}?')) deleteFile('${ep}')">Delete</button>` :
+                file.status === 'missing' ?
+                `<button class="btn-secondary" onclick="runSvn(['delete', '${ep}'])">Remove</button>
+                         <button class="btn-secondary" onclick="if(confirm('Revert ${ep}?')) runSvn(['revert', '-R', '${ep}'])">Revert</button>` :
                 file.status === 'conflict' ?
                 `<button class="btn-secondary" onclick="showDiff('${ep}')">Diff</button>
                          <button class="btn-primary" onclick="runSvn(['resolve', '--accept', 'working', '${ep}'])">Resolve (mine)</button>
@@ -869,7 +1168,31 @@ function renderStatus() {
         `;
     });
     html += '</div>';
+
+    // Add All Untracked button
+    const untrackedFiles = state.workingCopy.filter(f => f.status === 'untracked');
+    if (untrackedFiles.length > 0) {
+        html += `<div class="commit-form" style="margin-top: 12px;">
+            <div class="commit-form-actions">
+                <button class="btn-primary" onclick="addAllUntracked()">Add All Untracked (${untrackedFiles.length})</button>
+            </div>
+        </div>`;
+    }
+
     elements.contentArea.innerHTML = html;
+}
+
+async function addAllUntracked() {
+    const untracked = state.workingCopy.filter(f => f.status === 'untracked');
+    if (untracked.length === 0) return;
+    if (!confirm(`Add ${untracked.length} untracked file(s) to SVN?`)) return;
+
+    let added = 0;
+    for (const file of untracked) {
+        const success = await runSvn(['add', file.path]);
+        if (success) added++;
+    }
+    logToConsole(`Added ${added}/${untracked.length} files to SVN.`, 'success');
 }
 
 // === Log View ===
@@ -888,11 +1211,32 @@ async function fetchLog() {
         parseLogEntries(success.output || '');
     } else {
         state.logEntries = [];
+        logToConsole('Failed to fetch log entries.', 'error');
     }
     render();
 }
 
+// Wait for any in-progress operation or scanning to finish (max 15s)
+function waitForOperation() {
+    if (!state.currentOperation && !state.isScanning) return Promise.resolve();
+    return new Promise((resolve) => {
+        let elapsed = 0;
+        const interval = setInterval(() => {
+            elapsed += 200;
+            if ((!state.currentOperation && !state.isScanning) || elapsed >= 15000) {
+                clearInterval(interval);
+                resolve();
+            }
+        }, 200);
+    });
+}
+
 async function runSvnSilent(command) {
+    // Wait for current operation to finish instead of failing immediately
+    if (state.currentOperation) {
+        await waitForOperation();
+    }
+
     const cwd = state.selectedProjectIndex >= 0 ? state.projects[state.selectedProjectIndex].path : null;
     const url = state.selectedProjectIndex >= 0 ? state.projects[state.selectedProjectIndex].url : null;
 
@@ -929,18 +1273,17 @@ function parseLogEntries(output) {
         let changedPaths = [];
         let message = '';
         let inPaths = false;
-        let inMsg = false;
+        let passedPaths = false;
 
         for (let i = 1; i < lines.length; i++) {
             const line = lines[i];
             if (line.startsWith('Changed paths:')) {
                 inPaths = true;
-                inMsg = false;
                 continue;
             }
-            if (line.trim() === '' && inPaths) {
+            if (inPaths && line.trim() === '') {
                 inPaths = false;
-                inMsg = true;
+                passedPaths = true;
                 continue;
             }
             if (inPaths) {
@@ -948,10 +1291,18 @@ function parseLogEntries(output) {
                 if (pathMatch) {
                     changedPaths.push({ action: pathMatch[1], path: pathMatch[2] });
                 }
-            } else if (inMsg || (!inPaths && i > 0)) {
+            } else if (passedPaths) {
+                // After Changed paths section, collect message lines
                 if (line.trim() !== '' || message) {
                     message += (message ? '\n' : '') + line;
                 }
+            } else if (!inPaths && line.trim() === '' && i > 0) {
+                // No Changed paths section — blank line signals message start
+                passedPaths = true;
+            } else if (!inPaths && passedPaths === false && line.trim() !== '' && i > 0) {
+                // Fallback: non-empty line without Changed paths section
+                passedPaths = true;
+                message += line;
             }
         }
 
@@ -1036,7 +1387,7 @@ function getFilteredLogEntries() {
 
 function renderLog() {
     if (state.logEntries.length === 0) {
-        elements.contentArea.innerHTML = `<div class="empty-state"><p>No log entries found.</p></div>`;
+        elements.contentArea.innerHTML = `<div class="empty-state"><p>${t('msg.noLogEntries')}</p></div>`;
         return;
     }
 
@@ -1049,40 +1400,76 @@ function renderLog() {
     html += `<div class="log-filter-bar">
         <div class="log-filter-row">
             <div class="log-filter-group">
-                <input type="text" id="log-filter-keyword" class="log-filter-input" placeholder="Search keyword..." value="${escapeHtml(state.logFilter.keyword)}" oninput="debounceLogFilter()">
+                <input type="text" id="log-filter-keyword" class="log-filter-input" placeholder="${t('log.searchKeyword')}" value="${escapeHtml(state.logFilter.keyword)}" oninput="debounceLogFilter()">
             </div>
             <div class="log-filter-group">
-                <input type="text" id="log-filter-author" class="log-filter-input log-filter-author" placeholder="Author..." value="${escapeHtml(state.logFilter.author)}" oninput="debounceLogFilter()">
+                <input type="text" id="log-filter-author" class="log-filter-input log-filter-author" placeholder="${t('log.author')}" value="${escapeHtml(state.logFilter.author)}" oninput="debounceLogFilter()">
             </div>
             <div class="log-filter-group log-filter-date-group">
                 <input type="date" id="log-filter-date-from" class="log-filter-input log-filter-date" value="${state.logFilter.dateFrom}" onchange="applyLogFilter()">
                 <span class="log-filter-separator">~</span>
                 <input type="date" id="log-filter-date-to" class="log-filter-input log-filter-date" value="${state.logFilter.dateTo}" onchange="applyLogFilter()">
             </div>
-            <button class="btn-secondary btn-small" onclick="clearLogFilter()" ${hasFilter ? '' : 'disabled'}>Clear</button>
+            <button class="btn-secondary btn-small" onclick="clearLogFilter()" ${hasFilter ? '' : 'disabled'}>${t('log.clear')}</button>
         </div>
-        ${hasFilter ? `<div class="log-filter-results">Showing ${filtered.length} of ${state.logEntries.length} entries</div>` : ''}
+        ${hasFilter ? `<div class="log-filter-results">${t('log.showingEntries', { filtered: filtered.length, total: state.logEntries.length })}</div>` : ''}
+    </div>`;
+
+    // Compare bar (when 2 revisions selected)
+    const selectedRevCount = state.logSelectedRevisions.size;
+    if (selectedRevCount === 2) {
+        const revArr = Array.from(state.logSelectedRevisions).sort((a, b) => a - b);
+        html += `<div class="log-filter-bar" style="margin-bottom: 12px; background: rgba(var(--accent-rgb, 99, 102, 241), 0.15);">
+            <div class="log-filter-row" style="justify-content: space-between;">
+                <span style="color: var(--text-primary);">${t('log.revisionsSelected', { rev1: revArr[0], rev2: revArr[1] })}</span>
+                <div style="display: flex; gap: 8px;">
+                    <button class="btn-primary btn-small" onclick="compareSelectedRevisions()">${t('log.compareSelected')}</button>
+                    <button class="btn-secondary btn-small" onclick="state.logSelectedRevisions.clear(); render();">${t('log.clear')}</button>
+                </div>
+            </div>
+        </div>`;
+    } else if (selectedRevCount === 1) {
+        html += `<div class="log-filter-bar" style="margin-bottom: 12px;">
+            <div class="log-filter-row"><span style="color: var(--text-dim);">${t('log.selectOneMore', { count: selectedRevCount })}</span></div>
+        </div>`;
+    }
+
+    // Remote URL Log input
+    html += `<div class="log-filter-bar" style="margin-bottom: 12px;">
+        <div class="log-filter-row">
+            <input type="text" id="remote-log-url" class="log-filter-input" placeholder="${t('log.remoteUrlPlaceholder')}" style="flex: 2;">
+            <button class="btn-secondary btn-small" onclick="fetchRemoteLog()">${t('log.remoteLog')}</button>
+        </div>
     </div>`;
 
     // Log list
     html += '<div class="log-list">';
     if (filtered.length === 0) {
-        html += `<div class="empty-state" style="padding: 48px 0;"><p>No matching entries found.</p></div>`;
+        html += `<div class="empty-state" style="padding: 48px 0;"><p>${t('log.noMatchingEntries')}</p></div>`;
     } else {
         for (const entry of filtered) {
             const shortDate = entry.date.split('(')[0].trim();
+            const isRevSelected = state.logSelectedRevisions.has(entry.revision);
             html += `
-                <div class="log-card" onclick="this.querySelector('.log-details').classList.toggle('hidden')">
+                <div class="log-card">
                     <div class="log-header">
-                        <div class="log-revision">r${entry.revision}</div>
+                        <label class="checkbox-container" onclick="event.stopPropagation()" style="margin-right: 8px;">
+                            <input type="checkbox" ${isRevSelected ? 'checked' : ''} onchange="toggleLogRevisionSelect('${entry.revision}')">
+                            <span class="checkmark"></span>
+                        </label>
+                        <div class="log-revision" onclick="this.closest('.log-card').querySelector('.log-details').classList.toggle('hidden')">r${entry.revision}</div>
                         <div class="log-meta">
                             <span class="log-author">${escapeHtml(entry.author)}</span>
                             <span class="log-date">${escapeHtml(shortDate)}</span>
                         </div>
                     </div>
-                    <div class="log-message">${escapeHtml(entry.message || '(no message)')}</div>
+                    <div class="log-message" onclick="this.closest('.log-card').querySelector('.log-details').classList.toggle('hidden')">${escapeHtml(entry.message || t('log.noMessage'))}</div>
+                    <div class="log-actions" style="margin-top: 8px; display: flex; gap: 8px;" onclick="event.stopPropagation()">
+                        <button class="btn-secondary btn-small" onclick="revertToRevision('${entry.revision}')">${t('log.revertToThis')}</button>
+                        <button class="btn-secondary btn-small" onclick="revertRevisionChange('${entry.revision}')">${t('log.undoThisChange')}</button>
+                    </div>
                     <div class="log-details hidden">
-                        <div class="log-paths-title">Changed Files (${entry.changedPaths.length}):</div>
+                        <div class="log-paths-title">${t('log.changedFiles', { count: entry.changedPaths.length })}</div>
                         ${entry.changedPaths.map(p => `
                             <div class="log-path-item">
                                 <span class="file-badge badge-${actionToStatus(p.action)}">${p.action}</span>
@@ -1094,7 +1481,7 @@ function renderLog() {
             `;
         }
     }
-    html += `<div class="log-load-more"><button class="btn-secondary" onclick="state.logPage++; fetchLog();">Load More</button></div>`;
+    html += `<div class="log-load-more"><button class="btn-secondary" onclick="state.logPage++; fetchLog();">${t('log.loadMore')}</button></div>`;
     html += '</div>';
     elements.contentArea.innerHTML = html;
 }
@@ -1117,27 +1504,45 @@ function escapePath(str) {
 // === Commit View ===
 function renderCommitView() {
     if (!state.workingCopy || state.workingCopy.length === 0) {
-        elements.contentArea.innerHTML = `<div class="empty-state"><p>Workspace is clean. Nothing to commit.</p></div>`;
+        elements.contentArea.innerHTML = `<div class="empty-state"><p>${t('msg.nothingToCommit')}</p></div>`;
         return;
     }
 
-    const committable = state.workingCopy.filter(f => f.status !== 'untracked');
-    const untracked = state.workingCopy.filter(f => f.status === 'untracked');
+    let committable = state.workingCopy.filter(f => f.status !== 'untracked');
+    let untracked = state.workingCopy.filter(f => f.status === 'untracked');
 
     let html = '<div class="commit-view-container">';
 
+    // Filter bar
+    html += `<div class="log-filter-bar" style="margin-bottom: 12px;">
+        <div class="log-filter-row">
+            <input type="text" id="commit-filter-input" class="log-filter-input" placeholder="Filter files by name or path..." value="${escapeHtml(state.commitFilter || '')}" oninput="onCommitFilterChange()">
+            <button class="btn-secondary btn-small" onclick="clearCommitFilter()" ${state.commitFilter ? '' : 'disabled'}>Clear</button>
+        </div>
+    </div>`;
+
+    // Apply filter
+    const filterText = (state.commitFilter || '').toLowerCase();
+    if (filterText) {
+        committable = committable.filter(f => f.path.toLowerCase().includes(filterText));
+        untracked = untracked.filter(f => f.path.toLowerCase().includes(filterText));
+    }
+
     if (untracked.length > 0) {
-        html += `<div class="section-label">Untracked Files (must 'Add' before committing)</div>`;
+        html += `<div class="section-label">Untracked Files (must 'Add' before committing)
+            <button class="btn-primary btn-small" style="margin-left: 12px;" onclick="addAllUntracked()">Add All (${untracked.length})</button>
+        </div>`;
         html += '<div class="status-list">';
         untracked.forEach(file => {
+            const ep = escapePath(file.path);
             html += `
                 <div class="status-card">
                     <div class="file-info">
                         <span class="file-badge badge-untracked">?</span>
-                        <span class="file-path">${file.path}</span>
+                        <span class="file-path">${escapeHtml(file.path)}</span>
                     </div>
                     <div class="file-actions">
-                        <button class="btn-primary" onclick="runSvn(['add', '${file.path}'])">Add</button>
+                        <button class="btn-primary" onclick="runSvn(['add', '${ep}'])">Add</button>
                     </div>
                 </div>`;
         });
@@ -1145,22 +1550,23 @@ function renderCommitView() {
     }
 
     if (committable.length > 0) {
-        html += `<div class="section-label">Committable Files</div>`;
+        html += `<div class="section-label">Committable Files${filterText ? ` (filtered: ${committable.length})` : ''}</div>`;
         html += '<div class="status-list">';
         committable.forEach((file, index) => {
+            const ep = escapePath(file.path);
             const isSelected = state.selectedFiles.has(file.path);
             html += `
-                <div class="status-card ${isSelected ? 'selected' : ''}" style="animation-delay: ${index * 0.05}s" onclick="toggleFileSelection('${file.path}'); render();">
+                <div class="status-card ${isSelected ? 'selected' : ''}" style="animation-delay: ${index * 0.05}s" onclick="toggleFileSelection('${ep}'); render();">
                     <div class="file-info">
                         <label class="checkbox-container" onclick="event.stopPropagation()">
-                            <input type="checkbox" ${isSelected ? 'checked' : ''} onchange="toggleFileSelection('${file.path}'); render();">
+                            <input type="checkbox" ${isSelected ? 'checked' : ''} onchange="toggleFileSelection('${ep}'); render();">
                             <span class="checkmark"></span>
                         </label>
                         <span class="file-badge badge-${file.status}">${file.status.charAt(0).toUpperCase()}</span>
-                        <span class="file-path">${file.path}</span>
+                        <span class="file-path">${escapeHtml(file.path)}</span>
                     </div>
                     <div class="file-actions" onclick="event.stopPropagation()">
-                        <button class="btn-secondary" onclick="showDiff('${file.path}')">Diff</button>
+                        <button class="btn-secondary" onclick="showDiff('${ep}')">Diff</button>
                     </div>
                 </div>`;
         });
@@ -1219,7 +1625,7 @@ async function inlineCommit() {
 // === Revert View ===
 function renderRevertView() {
     if (!state.workingCopy || state.workingCopy.length === 0) {
-        elements.contentArea.innerHTML = `<div class="empty-state"><p>Workspace is clean. Nothing to revert.</p></div>`;
+        elements.contentArea.innerHTML = `<div class="empty-state"><p>${t('msg.nothingToRevert')}</p></div>`;
         return;
     }
 
@@ -1229,23 +1635,24 @@ function renderRevertView() {
     let html = '<div class="revert-view-container">';
 
     if (revertable.length > 0) {
-        html += `<div class="section-label">Modified Files (can be reverted)</div>`;
+        html += `<div class="section-label">${t('revert.modifiedFiles')}</div>`;
         html += '<div class="status-list">';
         revertable.forEach((file, index) => {
             const isSelected = state.selectedFiles.has(file.path);
+            const ep = escapePath(file.path);
             html += `
-                <div class="status-card ${isSelected ? 'selected' : ''}" style="animation-delay: ${index * 0.05}s" onclick="toggleFileSelection('${file.path}'); render();">
+                <div class="status-card ${isSelected ? 'selected' : ''}" style="animation-delay: ${index * 0.05}s" onclick="toggleFileSelection('${ep}'); render();">
                     <div class="file-info">
                         <label class="checkbox-container" onclick="event.stopPropagation()">
-                            <input type="checkbox" ${isSelected ? 'checked' : ''} onchange="toggleFileSelection('${file.path}'); render();">
+                            <input type="checkbox" ${isSelected ? 'checked' : ''} onchange="toggleFileSelection('${ep}'); render();">
                             <span class="checkmark"></span>
                         </label>
                         <span class="file-badge badge-${file.status}">${file.status.charAt(0).toUpperCase()}</span>
                         <span class="file-path">${file.path}</span>
                     </div>
                     <div class="file-actions" onclick="event.stopPropagation()">
-                        <button class="btn-secondary" onclick="showDiff('${file.path}')">Diff</button>
-                        <button class="btn-secondary" style="color: var(--error);" onclick="if(confirm('Revert ${file.path}?')) runSvn(['revert', '-R', '${file.path}'])">Revert</button>
+                        <button class="btn-secondary" onclick="showDiff('${ep}')">Diff</button>
+                        <button class="btn-secondary" style="color: var(--error);" onclick="if(confirm('Revert ${ep}?')) runSvn(['revert', '-R', '${ep}'])">Revert</button>
                     </div>
                 </div>`;
         });
@@ -1261,9 +1668,10 @@ function renderRevertView() {
     }
 
     if (untracked.length > 0) {
-        html += `<div class="section-label">Untracked Files (can be deleted)</div>`;
+        html += `<div class="section-label">${t('revert.untrackedFiles')}</div>`;
         html += '<div class="status-list">';
         untracked.forEach(file => {
+            const ep = escapePath(file.path);
             html += `
                 <div class="status-card">
                     <div class="file-info">
@@ -1271,7 +1679,7 @@ function renderRevertView() {
                         <span class="file-path">${file.path}</span>
                     </div>
                     <div class="file-actions">
-                        <button class="btn-secondary" style="color: var(--error);" onclick="if(confirm('Delete ${file.path}?')) deleteFile('${file.path}')">Delete</button>
+                        <button class="btn-secondary" style="color: var(--error);" onclick="if(confirm('Delete ${ep}?')) deleteFile('${ep}')">Delete</button>
                     </div>
                 </div>`;
         });
@@ -1305,6 +1713,13 @@ async function bulkRevert() {
 let lastDiffRawOutput = '';
 
 async function showDiff(filePath) {
+    const externalTool = state.settings.externalDiffTool || 'builtin';
+
+    if (externalTool !== 'builtin') {
+        await openExternalDiff(filePath, externalTool);
+        return;
+    }
+
     const cwd = state.selectedProjectIndex >= 0 ? state.projects[state.selectedProjectIndex].path : null;
     const url = state.selectedProjectIndex >= 0 ? state.projects[state.selectedProjectIndex].url : null;
 
@@ -1326,6 +1741,62 @@ async function showDiff(filePath) {
         }
     } catch (err) {
         elements.diffContent.innerHTML = `<div class="diff-empty" style="color: var(--error);">Failed: ${escapeHtml(err.message)}</div>`;
+    }
+}
+
+async function openExternalDiff(filePath, tool) {
+    const cwd = state.selectedProjectIndex >= 0 ? state.projects[state.selectedProjectIndex].path : null;
+    const url = state.selectedProjectIndex >= 0 ? state.projects[state.selectedProjectIndex].url : null;
+
+    // Get base version content
+    logToConsole(`Getting base version of ${filePath}...`, 'system');
+    const baseResult = await window.api.runSvn(['cat', '-r', 'BASE', filePath], cwd, url);
+    if (!baseResult || !baseResult.success) {
+        logToConsole('Failed to get base version of file.', 'error');
+        return;
+    }
+
+    // Write base content to temp file
+    const baseTmpPath = cwd + '/.svn-shelves/.diff-base-' + filePath.replace(/\//g, '_');
+    try {
+        await window.api.writeFile(baseTmpPath, baseResult.output || '');
+    } catch (e) {
+        logToConsole(`Failed to create temp file: ${e.message}`, 'error');
+        return;
+    }
+
+    const workingPath = cwd + '/' + filePath;
+    const toolCommands = {
+        'opendiff': ['opendiff', baseTmpPath, workingPath],
+        'vscode': ['code', '--diff', baseTmpPath, workingPath],
+        'bbedit': ['bbedit', '--diff', baseTmpPath, workingPath],
+        'kdiff3': ['kdiff3', baseTmpPath, workingPath]
+    };
+
+    const cmd = toolCommands[tool];
+    if (!cmd) {
+        logToConsole(`Unknown diff tool: ${tool}`, 'error');
+        return;
+    }
+
+    try {
+        const result = await window.api.openExternalDiff({ tool, basePath: baseTmpPath, workingPath });
+        if (result && result.success) {
+            logToConsole(`Opened ${tool} for ${filePath}`, 'success');
+        } else {
+            logToConsole(`Failed to open ${tool}: ${result ? result.error : 'unknown error'}. Falling back to built-in viewer.`, 'warning');
+            // Fallback: show built-in diff
+            const exOld = state.settings.externalDiffTool;
+            state.settings.externalDiffTool = 'builtin';
+            await showDiff(filePath);
+            state.settings.externalDiffTool = exOld;
+        }
+    } catch (e) {
+        logToConsole(`External diff error: ${e.message}. Falling back to built-in viewer.`, 'warning');
+        const exOld = state.settings.externalDiffTool;
+        state.settings.externalDiffTool = 'builtin';
+        await showDiff(filePath);
+        state.settings.externalDiffTool = exOld;
     }
 }
 
@@ -1594,20 +2065,20 @@ function renderAuthManager() {
     let html = '<div class="auth-manager-container">';
 
     html += `
-        <div class="section-label">Add Credentials</div>
+        <div class="section-label">${t('auth.addCredentials')}</div>
         <div class="auth-form">
             <div class="auth-form-row">
-                <input type="text" id="auth-new-url" class="auth-form-input" placeholder="Repository URL or 'global'">
-                <input type="text" id="auth-new-username" class="auth-form-input" placeholder="Username">
-                <input type="password" id="auth-new-password" class="auth-form-input" placeholder="Password">
-                <button class="btn-primary btn-small" onclick="saveNewAuth()">Save</button>
+                <input type="text" id="auth-new-url" class="auth-form-input" placeholder="${t('auth.repoUrlPlaceholder')}">
+                <input type="text" id="auth-new-username" class="auth-form-input" placeholder="${t('auth.usernamePlaceholder')}">
+                <input type="password" id="auth-new-password" class="auth-form-input" placeholder="${t('auth.passwordPlaceholder')}">
+                <button class="btn-primary btn-small" onclick="saveNewAuth()">${t('btn.save')}</button>
             </div>
         </div>`;
 
-    html += `<div class="section-label">Saved Credentials (${state.authEntries.length})</div>`;
+    html += `<div class="section-label">${t('auth.savedCredentials', { count: state.authEntries.length })}</div>`;
 
     if (state.authEntries.length === 0) {
-        html += `<div class="empty-state" style="padding: 48px 0;"><p>No saved credentials.</p></div>`;
+        html += `<div class="empty-state" style="padding: 48px 0;"><p>${t('auth.noSavedCredentials')}</p></div>`;
     } else {
         html += '<div class="status-list">';
         for (const entry of state.authEntries) {
@@ -1623,8 +2094,8 @@ function renderAuthManager() {
                                 <input type="password" id="auth-edit-password" class="auth-form-input" placeholder="New password">
                             </div>
                             <div class="auth-edit-actions">
-                                <button class="btn-primary btn-small" onclick="updateAuth('${escapeHtml(entry.urlKey)}')">Save</button>
-                                <button class="btn-secondary btn-small" onclick="cancelEditAuth()">Cancel</button>
+                                <button class="btn-primary btn-small" onclick="updateAuth('${escapeHtml(entry.urlKey)}')">${t('btn.save')}</button>
+                                <button class="btn-secondary btn-small" onclick="cancelEditAuth()">${t('btn.cancel')}</button>
                             </div>
                         </div>
                     </div>`;
@@ -1636,9 +2107,9 @@ function renderAuthManager() {
                             <span class="auth-username">${escapeHtml(entry.username)}</span>
                         </div>
                         <div class="file-actions" onclick="event.stopPropagation()">
-                            <button class="btn-secondary btn-small" onclick="testAuth('${escapeHtml(entry.urlKey)}')">Check</button>
-                            <button class="btn-secondary btn-small" onclick="editAuth('${escapeHtml(entry.urlKey)}')">Edit</button>
-                            <button class="btn-secondary btn-small" style="color: var(--error);" onclick="deleteAuthEntry('${escapeHtml(entry.urlKey)}')">Delete</button>
+                            <button class="btn-secondary btn-small" onclick="testAuth('${escapeHtml(entry.urlKey)}')">${t('auth.check')}</button>
+                            <button class="btn-secondary btn-small" onclick="editAuth('${escapeHtml(entry.urlKey)}')">${t('btn.edit')}</button>
+                            <button class="btn-secondary btn-small" style="color: var(--error);" onclick="deleteAuthEntry('${escapeHtml(entry.urlKey)}')">${t('btn.delete')}</button>
                         </div>
                     </div>`;
             }
@@ -1715,7 +2186,10 @@ async function deleteAuthEntry(urlKey) {
 }
 
 async function testAuth(urlKey) {
-    if (state.currentOperation) return;
+    if (state.currentOperation) {
+        logToConsole(`Busy: "${state.currentOperation}" in progress. Please wait.`, 'warning');
+        return;
+    }
 
     const url = urlKey === 'global' ? (state.selectedProjectIndex >= 0 ? state.projects[state.selectedProjectIndex].url : null) : urlKey;
 
@@ -1805,6 +2279,8 @@ async function treeFolderStatus(dirPath, event) {
     event.stopPropagation();
     const project = state.projects[state.selectedProjectIndex];
     if (!project) return;
+
+    if (state.currentOperation) await waitForOperation();
 
     showOperation('Scanning status...');
     try {
@@ -2008,26 +2484,26 @@ function renderProperties() {
     // Target selector
     html += `<div class="prop-target-bar">
         <div class="prop-target-row">
-            <input type="text" id="prop-target-input" class="auth-form-input" placeholder="Path (relative to working copy, e.g. '.' or 'src/file.txt')" value="${escapeHtml(state.propertiesTarget)}">
-            <button class="btn-primary btn-small" onclick="changePropTarget()">Load</button>
+            <input type="text" id="prop-target-input" class="auth-form-input" placeholder="${t('props.pathPlaceholder')}" value="${escapeHtml(state.propertiesTarget)}">
+            <button class="btn-primary btn-small" onclick="changePropTarget()">${t('btn.load')}</button>
         </div>
     </div>`;
 
     // Add property form
-    html += `<div class="section-label">Add Property</div>
+    html += `<div class="section-label">${t('props.addProperty')}</div>
     <div class="auth-form">
         <div class="auth-form-row">
-            <input type="text" id="prop-new-name" class="auth-form-input" placeholder="Property name (e.g. svn:ignore)">
-            <input type="text" id="prop-new-value" class="auth-form-input" style="flex:2" placeholder="Property value">
-            <button class="btn-primary btn-small" onclick="addProperty()">Set</button>
+            <input type="text" id="prop-new-name" class="auth-form-input" placeholder="${t('props.namePlaceholder')}">
+            <input type="text" id="prop-new-value" class="auth-form-input" style="flex:2" placeholder="${t('props.valuePlaceholder')}">
+            <button class="btn-primary btn-small" onclick="addProperty()">${t('props.set')}</button>
         </div>
     </div>`;
 
     // Properties list
-    html += `<div class="section-label">Properties on '${escapeHtml(state.propertiesTarget)}' (${state.properties.length})</div>`;
+    html += `<div class="section-label">${t('props.propertiesOn', { target: escapeHtml(state.propertiesTarget), count: state.properties.length })}</div>`;
 
     if (state.properties.length === 0) {
-        html += `<div class="empty-state" style="padding: 48px 0;"><p>No properties found.</p></div>`;
+        html += `<div class="empty-state" style="padding: 48px 0;"><p>${t('props.noProperties')}</p></div>`;
     } else {
         html += '<div class="status-list">';
         for (const prop of state.properties) {
@@ -2039,8 +2515,8 @@ function renderProperties() {
                             <div class="prop-name-badge">${escapeHtml(prop.name)}</div>
                             <textarea id="prop-edit-value" class="prop-edit-textarea">${escapeHtml(prop.value)}</textarea>
                             <div class="auth-edit-actions">
-                                <button class="btn-primary btn-small" onclick="updateProperty('${escapeHtml(prop.name)}')">Save</button>
-                                <button class="btn-secondary btn-small" onclick="cancelEditProp()">Cancel</button>
+                                <button class="btn-primary btn-small" onclick="updateProperty('${escapeHtml(prop.name)}')">${t('btn.save')}</button>
+                                <button class="btn-secondary btn-small" onclick="cancelEditProp()">${t('btn.cancel')}</button>
                             </div>
                         </div>
                     </div>`;
@@ -2052,8 +2528,8 @@ function renderProperties() {
                             <pre class="prop-value">${escapeHtml(prop.value)}</pre>
                         </div>
                         <div class="file-actions" onclick="event.stopPropagation()">
-                            <button class="btn-secondary btn-small" onclick="editProp('${escapeHtml(prop.name)}')">Edit</button>
-                            <button class="btn-secondary btn-small" style="color: var(--error);" onclick="deleteProperty('${escapeHtml(prop.name)}')">Delete</button>
+                            <button class="btn-secondary btn-small" onclick="editProp('${escapeHtml(prop.name)}')">${t('btn.edit')}</button>
+                            <button class="btn-secondary btn-small" style="color: var(--error);" onclick="deleteProperty('${escapeHtml(prop.name)}')">${t('btn.delete')}</button>
                         </div>
                     </div>`;
             }
@@ -2141,8 +2617,7 @@ async function fetchBranchInfo() {
 
         // Try to list branches and tags
         if (state.repoRootUrl) {
-            await fetchBranchList();
-            await fetchTagList();
+            await Promise.all([fetchBranchList(), fetchTagList()]);
         }
     } else {
         state.branchInfo = null;
@@ -2231,34 +2706,34 @@ function renderBranch() {
     if (state.branchInfo) {
         const info = state.branchInfo;
         const currentBranch = info.relativeUrl || info.url || 'Unknown';
-        html += `<div class="section-label">Current Location</div>
+        html += `<div class="section-label">${t('branch.currentLocation')}</div>
         <div class="branch-info-card">
-            <div class="branch-info-row"><span class="branch-label">URL</span><span class="branch-value">${escapeHtml(info.url || '')}</span></div>
-            <div class="branch-info-row"><span class="branch-label">Relative</span><span class="branch-value">${escapeHtml(currentBranch)}</span></div>
-            <div class="branch-info-row"><span class="branch-label">Revision</span><span class="branch-value">r${escapeHtml(info.revision || '')}</span></div>
-            <div class="branch-info-row"><span class="branch-label">Last Author</span><span class="branch-value">${escapeHtml(info.lastAuthor || '')}</span></div>
-            <div class="branch-info-row"><span class="branch-label">Last Changed</span><span class="branch-value">${escapeHtml(info.lastDate || '')}</span></div>
+            <div class="branch-info-row"><span class="branch-label">${t('branch.url')}</span><span class="branch-value">${escapeHtml(info.url || '')}</span></div>
+            <div class="branch-info-row"><span class="branch-label">${t('branch.relative')}</span><span class="branch-value">${escapeHtml(currentBranch)}</span></div>
+            <div class="branch-info-row"><span class="branch-label">${t('branch.revision')}</span><span class="branch-value">r${escapeHtml(info.revision || '')}</span></div>
+            <div class="branch-info-row"><span class="branch-label">${t('branch.lastAuthor')}</span><span class="branch-value">${escapeHtml(info.lastAuthor || '')}</span></div>
+            <div class="branch-info-row"><span class="branch-label">${t('branch.lastChanged')}</span><span class="branch-value">${escapeHtml(info.lastDate || '')}</span></div>
         </div>`;
     }
 
     // Create branch/tag
-    html += `<div class="section-label">Create Branch / Tag</div>
+    html += `<div class="section-label">${t('branch.createBranchTag')}</div>
     <div class="auth-form">
         <div class="auth-form-row">
             <select id="branch-create-type" class="auth-form-input" style="flex:0 0 120px">
-                <option value="branch">Branch</option>
-                <option value="tag">Tag</option>
+                <option value="branch">${t('branch.branch')}</option>
+                <option value="tag">${t('branch.tag')}</option>
             </select>
-            <input type="text" id="branch-create-name" class="auth-form-input" style="flex:2" placeholder="Name (e.g. feature-login)">
-            <input type="text" id="branch-create-message" class="auth-form-input" style="flex:2" placeholder="Commit message">
-            <button class="btn-primary btn-small" onclick="createBranchOrTag()">Create</button>
+            <input type="text" id="branch-create-name" class="auth-form-input" style="flex:2" placeholder="${t('branch.namePlaceholder')}">
+            <input type="text" id="branch-create-message" class="auth-form-input" style="flex:2" placeholder="${t('branch.commitMessage')}">
+            <button class="btn-primary btn-small" onclick="createBranchOrTag()">${t('btn.create')}</button>
         </div>
     </div>`;
 
     // Branches list
-    html += `<div class="section-label">Branches (${state.branchList.length})</div>`;
+    html += `<div class="section-label">${t('branch.branches', { count: state.branchList.length })}</div>`;
     if (state.branchList.length === 0) {
-        html += `<div class="empty-state" style="padding: 32px 0;"><p>No branches found (or /branches path doesn't exist).</p></div>`;
+        html += `<div class="empty-state" style="padding: 32px 0;"><p>${t('branch.noBranches')}</p></div>`;
     } else {
         html += '<div class="status-list">';
         for (const branch of state.branchList) {
@@ -2270,7 +2745,7 @@ function renderBranch() {
                         <span class="file-path">${escapeHtml(branch)}</span>
                     </div>
                     <div class="file-actions" onclick="event.stopPropagation()">
-                        <button class="btn-primary btn-small" onclick="switchToBranch('${escapeHtml(branchUrl)}')">Switch</button>
+                        <button class="btn-primary btn-small" onclick="switchToBranch('${escapeHtml(branchUrl)}')">${t('branch.switch')}</button>
                     </div>
                 </div>`;
         }
@@ -2278,9 +2753,9 @@ function renderBranch() {
     }
 
     // Tags list
-    html += `<div class="section-label">Tags (${state.tagList.length})</div>`;
+    html += `<div class="section-label">${t('branch.tags', { count: state.tagList.length })}</div>`;
     if (state.tagList.length === 0) {
-        html += `<div class="empty-state" style="padding: 32px 0;"><p>No tags found (or /tags path doesn't exist).</p></div>`;
+        html += `<div class="empty-state" style="padding: 32px 0;"><p>${t('branch.noTags')}</p></div>`;
     } else {
         html += '<div class="status-list">';
         for (const tag of state.tagList) {
@@ -2292,7 +2767,7 @@ function renderBranch() {
                         <span class="file-path">${escapeHtml(tag)}</span>
                     </div>
                     <div class="file-actions" onclick="event.stopPropagation()">
-                        <button class="btn-primary btn-small" onclick="switchToBranch('${escapeHtml(tagUrl)}')">Switch</button>
+                        <button class="btn-primary btn-small" onclick="switchToBranch('${escapeHtml(tagUrl)}')">${t('branch.switch')}</button>
                     </div>
                 </div>`;
         }
@@ -2393,19 +2868,19 @@ function renderLockView() {
 
     let html = '<div class="lock-container">';
 
-    html += `<div class="section-label">Lock a File</div>
+    html += `<div class="section-label">${t('lock.lockFile')}</div>
     <div class="auth-form">
         <div class="auth-form-row" style="flex-wrap: wrap; gap: 10px;">
-            <input type="text" id="lock-file-path" class="auth-form-input" style="flex:2; min-width: 200px;" placeholder="File path (relative to working copy)">
-            <input type="text" id="lock-message" class="auth-form-input" style="flex:2; min-width: 200px;" placeholder="Lock message (optional)">
-            <button class="btn-primary btn-small" onclick="lockFileFromInput()">Lock</button>
+            <input type="text" id="lock-file-path" class="auth-form-input" style="flex:2; min-width: 200px;" placeholder="${t('lock.filePathPlaceholder')}">
+            <input type="text" id="lock-message" class="auth-form-input" style="flex:2; min-width: 200px;" placeholder="${t('lock.messagePlaceholder')}">
+            <button class="btn-primary btn-small" onclick="lockFileFromInput()">${t('lock.lock')}</button>
         </div>
     </div>`;
 
-    html += `<div class="section-label">Locked Files (${state.lockFiles.length})</div>`;
+    html += `<div class="section-label">${t('lock.lockedFiles', { count: state.lockFiles.length })}</div>`;
 
     if (state.lockFiles.length === 0) {
-        html += `<div class="empty-state" style="padding: 48px 0;"><p>No locked files detected. Click Refresh to scan.</p></div>`;
+        html += `<div class="empty-state" style="padding: 48px 0;"><p>${t('lock.noLockedFiles')}</p></div>`;
     } else {
         html += '<div class="status-list">';
         for (const file of state.lockFiles) {
@@ -2413,9 +2888,9 @@ function renderLockView() {
             const badgeClass = file.lockStatus === 'locked-mine' ? 'badge-lock-mine' :
                                file.lockStatus === 'locked-other' ? 'badge-lock-other' :
                                file.lockStatus === 'stolen' ? 'badge-lock-stolen' : 'badge-lock-broken';
-            const badgeLabel = file.lockStatus === 'locked-mine' ? 'K (Mine)' :
-                               file.lockStatus === 'locked-other' ? 'O (Other)' :
-                               file.lockStatus === 'stolen' ? 'T (Stolen)' : 'B (Broken)';
+            const badgeLabel = file.lockStatus === 'locked-mine' ? t('lock.mine') :
+                               file.lockStatus === 'locked-other' ? t('lock.other') :
+                               file.lockStatus === 'stolen' ? t('lock.stolen') : t('lock.broken');
 
             html += `
                 <div class="status-card lock-card" onclick="fetchLockInfo('${ep}')">
@@ -2424,10 +2899,10 @@ function renderLockView() {
                         <span class="file-path">${escapeHtml(file.path)}</span>
                     </div>
                     <div class="file-actions" onclick="event.stopPropagation()">
-                        <button class="btn-secondary btn-small" onclick="fetchLockInfo('${ep}')">Info</button>
+                        <button class="btn-secondary btn-small" onclick="fetchLockInfo('${ep}')">${t('lock.info')}</button>
                         ${file.lockStatus === 'locked-mine' ?
-                            `<button class="btn-secondary btn-small" onclick="unlockFile('${ep}', false)">Unlock</button>` :
-                            `<button class="btn-secondary btn-small" style="color: var(--warning);" onclick="unlockFile('${ep}', true)">Force Unlock</button>`
+                            `<button class="btn-secondary btn-small" onclick="unlockFile('${ep}', false)">${t('lock.unlock')}</button>` :
+                            `<button class="btn-secondary btn-small" style="color: var(--warning);" onclick="unlockFile('${ep}', true)">${t('lock.forceUnlock')}</button>`
                         }
                     </div>
                 </div>`;
@@ -2555,27 +3030,27 @@ function renderBlameView() {
 
     let html = '<div class="blame-container">';
 
-    html += `<div class="section-label">Select File</div>
+    html += `<div class="section-label">${t('blame.selectFile')}</div>
     <div class="auth-form">
         <div class="auth-form-row">
-            <input type="text" id="blame-file-path" class="auth-form-input" style="flex:3" placeholder="File path (relative to working copy, e.g. src/main.js)" value="${escapeHtml(state.blameFile)}">
-            <button class="btn-primary btn-small" onclick="loadBlameFromInput()">Load</button>
+            <input type="text" id="blame-file-path" class="auth-form-input" style="flex:3" placeholder="${t('blame.filePathPlaceholder')}" value="${escapeHtml(state.blameFile)}">
+            <button class="btn-primary btn-small" onclick="loadBlameFromInput()">${t('btn.load')}</button>
         </div>
     </div>`;
 
     if (state.blameData.length === 0 && !state.blameFile) {
-        html += `<div class="empty-state" style="padding: 48px 0;"><p>Enter a file path above and click Load to view blame/annotate data.</p></div>`;
+        html += `<div class="empty-state" style="padding: 48px 0;"><p>${t('blame.enterFilePath')}</p></div>`;
     } else if (state.blameData.length === 0 && state.blameFile) {
-        html += `<div class="empty-state" style="padding: 48px 0;"><p>No blame data for '${escapeHtml(state.blameFile)}'. The file may be unversioned or binary.</p></div>`;
+        html += `<div class="empty-state" style="padding: 48px 0;"><p>${t('blame.noData', { file: escapeHtml(state.blameFile) })}</p></div>`;
     } else {
         const authorColors = getAuthorColorMap(state.blameData);
 
-        html += `<div class="section-label">Blame for '${escapeHtml(state.blameFile)}' (${state.blameData.length} lines)</div>`;
+        html += `<div class="section-label">${t('blame.blameFor', { file: escapeHtml(state.blameFile), count: state.blameData.length })}</div>`;
         html += '<div class="blame-table-wrapper"><table class="blame-table"><thead><tr>';
-        html += '<th class="blame-col-line">#</th>';
-        html += '<th class="blame-col-rev">Rev</th>';
-        html += '<th class="blame-col-author">Author</th>';
-        html += '<th class="blame-col-code">Code</th>';
+        html += `<th class="blame-col-line">${t('blame.line')}</th>`;
+        html += `<th class="blame-col-rev">${t('blame.rev')}</th>`;
+        html += `<th class="blame-col-author">${t('blame.author')}</th>`;
+        html += `<th class="blame-col-code">${t('blame.code')}</th>`;
         html += '</tr></thead><tbody>';
 
         for (let i = 0; i < state.blameData.length; i++) {
@@ -2628,35 +3103,58 @@ function renderSettings() {
     let html = '<div class="settings-container">';
 
     // General
-    html += `<div class="section-label">General</div>
+    html += `<div class="section-label">${t('settings.general')}</div>
     <div class="settings-card">
         <div class="settings-row">
             <div class="settings-info">
-                <span class="settings-title">Log Entries Limit</span>
-                <span class="settings-desc">Number of log entries per page</span>
+                <span class="settings-title">${t('settings.logLimit')}</span>
+                <span class="settings-desc">${t('settings.logLimitDesc')}</span>
             </div>
             <input type="number" id="settings-log-limit" class="settings-input" value="${s.logLimit}" min="5" max="200" onchange="onSettingChange()">
         </div>
         <div class="settings-row">
             <div class="settings-info">
-                <span class="settings-title">Theme</span>
-                <span class="settings-desc">UI color theme</span>
+                <span class="settings-title">${t('settings.theme')}</span>
+                <span class="settings-desc">${t('settings.themeDesc')}</span>
             </div>
             <select id="settings-theme" class="settings-input" onchange="onSettingChange()">
-                <option value="dark" ${s.theme === 'dark' ? 'selected' : ''}>Dark (Default)</option>
-                <option value="midnight" ${s.theme === 'midnight' ? 'selected' : ''}>Midnight Blue</option>
-                <option value="forest" ${s.theme === 'forest' ? 'selected' : ''}>Forest Green</option>
+                <option value="dark" ${s.theme === 'dark' ? 'selected' : ''}>${t('settings.themeDark')}</option>
+                <option value="midnight" ${s.theme === 'midnight' ? 'selected' : ''}>${t('settings.themeMidnight')}</option>
+                <option value="forest" ${s.theme === 'forest' ? 'selected' : ''}>${t('settings.themeForest')}</option>
+            </select>
+        </div>
+        <div class="settings-row">
+            <div class="settings-info">
+                <span class="settings-title">${t('settings.language')}</span>
+                <span class="settings-desc">${t('settings.languageDesc')}</span>
+            </div>
+            <select id="settings-language" class="settings-input" onchange="onLanguageChange()">
+                <option value="en" ${getCurrentLanguage() === 'en' ? 'selected' : ''}>English</option>
+                <option value="ko" ${getCurrentLanguage() === 'ko' ? 'selected' : ''}>한국어</option>
+            </select>
+        </div>
+        <div class="settings-row">
+            <div class="settings-info">
+                <span class="settings-title">${t('settings.extDiffTool')}</span>
+                <span class="settings-desc">${t('settings.extDiffToolDesc')}</span>
+            </div>
+            <select id="settings-ext-diff" class="settings-input" onchange="onSettingChange()">
+                <option value="builtin" ${(s.externalDiffTool || 'builtin') === 'builtin' ? 'selected' : ''}>${t('settings.builtinViewer')}</option>
+                <option value="opendiff" ${s.externalDiffTool === 'opendiff' ? 'selected' : ''}>FileMerge (opendiff)</option>
+                <option value="vscode" ${s.externalDiffTool === 'vscode' ? 'selected' : ''}>VS Code</option>
+                <option value="bbedit" ${s.externalDiffTool === 'bbedit' ? 'selected' : ''}>BBEdit</option>
+                <option value="kdiff3" ${s.externalDiffTool === 'kdiff3' ? 'selected' : ''}>KDiff3</option>
             </select>
         </div>
     </div>`;
 
     // Auto-refresh
-    html += `<div class="section-label">Auto-refresh</div>
+    html += `<div class="section-label">${t('settings.autoRefresh')}</div>
     <div class="settings-card">
         <div class="settings-row">
             <div class="settings-info">
-                <span class="settings-title">Enable Auto-refresh</span>
-                <span class="settings-desc">Watch files for changes and refresh status automatically</span>
+                <span class="settings-title">${t('settings.enableAutoRefresh')}</span>
+                <span class="settings-desc">${t('settings.enableAutoRefreshDesc')}</span>
             </div>
             <label class="toggle-switch">
                 <input type="checkbox" id="settings-auto-refresh" ${s.autoRefresh ? 'checked' : ''} onchange="onAutoRefreshToggle()">
@@ -2665,41 +3163,41 @@ function renderSettings() {
         </div>
         <div class="settings-row">
             <div class="settings-info">
-                <span class="settings-title">Debounce Interval</span>
-                <span class="settings-desc">Delay before auto-refresh triggers (ms)</span>
+                <span class="settings-title">${t('settings.debounceInterval')}</span>
+                <span class="settings-desc">${t('settings.debounceIntervalDesc')}</span>
             </div>
             <input type="number" id="settings-auto-interval" class="settings-input" value="${s.autoRefreshInterval}" min="1000" max="30000" step="1000" onchange="onSettingChange()">
         </div>
         <div class="settings-row">
             <div class="settings-info">
-                <span class="settings-title">Watcher Status</span>
-                <span class="settings-desc">File watcher is currently ${state.watcherActive ? 'active' : 'inactive'}</span>
+                <span class="settings-title">${t('settings.watcherStatus')}</span>
+                <span class="settings-desc">${state.watcherActive ? t('settings.watcherActive') : t('settings.watcherInactive')}</span>
             </div>
-            <span class="settings-status-badge ${state.watcherActive ? 'active' : ''}">${state.watcherActive ? 'Active' : 'Inactive'}</span>
+            <span class="settings-status-badge ${state.watcherActive ? 'active' : ''}">${state.watcherActive ? t('settings.watcherActive') : t('settings.watcherInactive')}</span>
         </div>
     </div>`;
 
     // Keyboard shortcuts
-    html += `<div class="section-label">Keyboard Shortcuts</div>
+    html += `<div class="section-label">${t('settings.shortcuts')}</div>
     <div class="settings-card">
         <div class="settings-row">
             <div class="settings-info">
-                <span class="settings-title">Show Shortcuts Help</span>
-                <span class="settings-desc">Press <kbd>?</kbd> anywhere to view all shortcuts</span>
+                <span class="settings-title">${t('settings.showShortcuts')}</span>
+                <span class="settings-desc">${t('settings.showShortcutsDesc')}</span>
             </div>
-            <button class="btn-secondary btn-small" onclick="openShortcutsModal()">View Shortcuts</button>
+            <button class="btn-secondary btn-small" onclick="openShortcutsModal()">${t('btn.viewShortcuts')}</button>
         </div>
     </div>`;
 
     // About
-    html += `<div class="section-label">About</div>
+    html += `<div class="section-label">${t('settings.about')}</div>
     <div class="settings-card">
         <div class="settings-row">
             <div class="settings-info">
                 <span class="settings-title">JellySvn</span>
-                <span class="settings-desc">Premium SVN Client — Glassmorphism Dark UI</span>
+                <span class="settings-desc">${t('settings.aboutDesc')}</span>
             </div>
-            <span class="settings-version">v1.0.0</span>
+            <span class="settings-version">v1.1.0</span>
         </div>
     </div>`;
 
@@ -2707,14 +3205,23 @@ function renderSettings() {
     elements.contentArea.innerHTML = html;
 }
 
+function onLanguageChange() {
+    const langSelect = document.getElementById('settings-language');
+    if (langSelect) {
+        setLanguage(langSelect.value);
+    }
+}
+
 function onSettingChange() {
     const logLimit = parseInt(document.getElementById('settings-log-limit').value) || 20;
     const theme = document.getElementById('settings-theme').value;
     const interval = parseInt(document.getElementById('settings-auto-interval').value) || 5000;
+    const extDiff = document.getElementById('settings-ext-diff');
 
     state.settings.logLimit = logLimit;
     state.settings.theme = theme;
     state.settings.autoRefreshInterval = interval;
+    state.settings.externalDiffTool = extDiff ? extDiff.value : 'builtin';
     state.logLimit = logLimit;
 
     applyTheme(theme);
@@ -2762,8 +3269,6 @@ function applyTheme(theme) {
 // =============================================
 // === Search View (NEW) ===
 // =============================================
-let _searchDebounceTimer = null;
-
 function renderSearchView() {
     const project = state.projects[state.selectedProjectIndex];
     if (!project) {
@@ -2776,21 +3281,21 @@ function renderSearchView() {
     // Search bar
     html += `<div class="search-bar">
         <div class="search-bar-row">
-            <input type="text" id="search-query-input" class="search-input" placeholder="Search files..." value="${escapeHtml(state.searchQuery)}" onkeydown="if(event.key==='Enter'){executeSearch();}">
+            <input type="text" id="search-query-input" class="search-input" placeholder="${t('search.placeholder')}" value="${escapeHtml(state.searchQuery)}" onkeydown="if(event.key==='Enter'){executeSearch();}">
             <div class="search-type-toggle">
-                <button class="${state.searchType === 'filename' ? 'active' : ''}" onclick="setSearchType('filename')">Filename</button>
-                <button class="${state.searchType === 'content' ? 'active' : ''}" onclick="setSearchType('content')">Content</button>
+                <button class="${state.searchType === 'filename' ? 'active' : ''}" onclick="setSearchType('filename')">${t('search.filename')}</button>
+                <button class="${state.searchType === 'content' ? 'active' : ''}" onclick="setSearchType('content')">${t('search.content')}</button>
             </div>
-            <button class="btn-primary" onclick="executeSearch()" ${state.searchLoading ? 'disabled' : ''}>Search</button>
+            <button class="btn-primary" onclick="executeSearch()" ${state.searchLoading ? 'disabled' : ''}>${t('btn.search')}</button>
         </div>
     </div>`;
 
     // Results area
     if (state.searchLoading) {
-        html += '<div class="empty-state" style="padding: 64px 0;"><div class="loading-spinner"></div><p>Searching...</p></div>';
+        html += `<div class="empty-state" style="padding: 64px 0;"><div class="loading-spinner"></div><p>${t('search.searching')}</p></div>`;
     } else if (state.searchQuery && state.searchResults.length > 0) {
-        const truncatedNote = state.searchResultsTruncated ? ' (results limited to 200)' : '';
-        html += `<div class="search-results-header">${state.searchResults.length} match${state.searchResults.length !== 1 ? 'es' : ''} found${truncatedNote}</div>`;
+        const truncatedNote = state.searchResultsTruncated ? ' ' + t('search.resultsLimited') : '';
+        html += `<div class="search-results-header">${t('search.matchesFound', { count: state.searchResults.length })}${truncatedNote}</div>`;
         html += '<div class="search-results-list">';
         for (const result of state.searchResults) {
             if (result.type === 'content' && result.matches) {
@@ -2824,9 +3329,9 @@ function renderSearchView() {
         }
         html += '</div>';
     } else if (state.searchQuery && state.searchResults.length === 0) {
-        html += '<div class="empty-state" style="padding: 64px 0;"><p>No matches found.</p></div>';
+        html += `<div class="empty-state" style="padding: 64px 0;"><p>${t('search.noMatches')}</p></div>`;
     } else {
-        html += '<div class="empty-state" style="padding: 64px 0;"><p>Enter a query and press Search.</p></div>';
+        html += `<div class="empty-state" style="padding: 64px 0;"><p>${t('search.enterQuery')}</p></div>`;
     }
 
     html += '</div>';
@@ -2907,16 +3412,16 @@ function renderMergeView() {
     let html = '<div class="merge-container">';
 
     // Source URL input
-    html += `<div class="section-label">Merge Source</div>
+    html += `<div class="section-label">${t('merge.source')}</div>
     <div class="auth-form">
         <div class="auth-form-row">
-            <input type="text" id="merge-source-url" class="auth-form-input" style="flex:3" placeholder="Source URL (e.g. https://svn.example.com/repo/branches/feature)" value="${escapeHtml(state.mergeSource)}">
+            <input type="text" id="merge-source-url" class="auth-form-input" style="flex:3" placeholder="${t('merge.sourceUrlPlaceholder')}" value="${escapeHtml(state.mergeSource)}">
         </div>`;
 
     // Branch suggestions
     if (state.branchList.length > 0 && state.repoRootUrl) {
         html += `<div class="merge-suggestions">
-            <span class="merge-suggestions-label">Branches:</span>`;
+            <span class="merge-suggestions-label">${t('merge.branches')}</span>`;
         for (const branch of state.branchList) {
             const branchUrl = state.repoRootUrl + '/branches/' + branch;
             html += `<button class="btn-secondary btn-small merge-suggestion-btn" onclick="document.getElementById('merge-source-url').value='${escapeHtml(branchUrl)}'">${escapeHtml(branch)}</button>`;
@@ -2927,36 +3432,36 @@ function renderMergeView() {
     html += '</div>';
 
     // Revision range inputs
-    html += `<div class="section-label">Revision Range (Optional)</div>
+    html += `<div class="section-label">${t('merge.revisionRange')}</div>
     <div class="auth-form">
         <div class="auth-form-row">
-            <input type="text" id="merge-rev-from" class="auth-form-input" placeholder="From revision (e.g. 100)" value="${escapeHtml(state.mergeRevFrom)}">
-            <span class="merge-rev-separator">to</span>
-            <input type="text" id="merge-rev-to" class="auth-form-input" placeholder="To revision (e.g. 150)" value="${escapeHtml(state.mergeRevTo)}">
+            <input type="text" id="merge-rev-from" class="auth-form-input" placeholder="${t('merge.fromRevision')}" value="${escapeHtml(state.mergeRevFrom)}">
+            <span class="merge-rev-separator">${t('merge.to')}</span>
+            <input type="text" id="merge-rev-to" class="auth-form-input" placeholder="${t('merge.toRevision')}" value="${escapeHtml(state.mergeRevTo)}">
         </div>
     </div>`;
 
     // Options
-    html += `<div class="section-label">Options</div>
+    html += `<div class="section-label">${t('merge.options')}</div>
     <div class="auth-form">
         <div class="auth-form-row" style="align-items: center;">
             <label class="checkbox-container" style="margin-right: 12px;">
                 <input type="checkbox" id="merge-reintegrate">
                 <span class="checkmark"></span>
             </label>
-            <span style="color: var(--text-secondary);">Reintegrate merge (merge branch back into trunk)</span>
+            <span style="color: var(--text-secondary);">${t('merge.reintegrate')}</span>
         </div>
     </div>`;
 
     // Action buttons
     html += `<div class="merge-actions">
-        <button class="btn-secondary" onclick="previewMerge()">Preview (Dry Run)</button>
-        <button class="btn-primary" onclick="executeMerge()">Execute Merge</button>
+        <button class="btn-secondary" onclick="previewMerge()">${t('merge.preview')}</button>
+        <button class="btn-primary" onclick="executeMerge()">${t('merge.execute')}</button>
     </div>`;
 
     // Preview results
     if (state.mergePreview.length > 0) {
-        html += `<div class="section-label">Preview Results (${state.mergePreview.length} files affected)</div>`;
+        html += `<div class="section-label">${t('merge.previewResults', { count: state.mergePreview.length })}</div>`;
         html += '<div class="status-list">';
         for (const item of state.mergePreview) {
             html += `
@@ -3077,80 +3582,80 @@ function renderExportImportView() {
     let html = '<div class="export-import-container">';
 
     // === Export Section ===
-    html += `<div class="section-label">Export</div>
+    html += `<div class="section-label">${t('export.export')}</div>
     <div class="settings-card">
         <div class="settings-row">
             <div class="settings-info">
-                <span class="settings-title">Source</span>
-                <span class="settings-desc">Choose what to export</span>
+                <span class="settings-title">${t('export.source')}</span>
+                <span class="settings-desc">${t('export.sourceDesc')}</span>
             </div>
             <div class="export-source-toggle">
                 <label style="display: flex; align-items: center; gap: 6px; color: var(--text-secondary); cursor: pointer;">
-                    <input type="radio" name="export-source" value="wc" checked onchange="toggleExportSource()"> Working Copy
+                    <input type="radio" name="export-source" value="wc" checked onchange="toggleExportSource()"> ${t('export.workingCopy')}
                 </label>
                 <label style="display: flex; align-items: center; gap: 6px; color: var(--text-secondary); cursor: pointer;">
-                    <input type="radio" name="export-source" value="url" onchange="toggleExportSource()"> Repository URL
+                    <input type="radio" name="export-source" value="url" onchange="toggleExportSource()"> ${t('export.repoUrl')}
                 </label>
             </div>
         </div>
         <div class="settings-row" id="export-url-row" style="display: none;">
             <div class="settings-info">
-                <span class="settings-title">Repository URL</span>
-                <span class="settings-desc">SVN repository URL to export from</span>
+                <span class="settings-title">${t('export.repoUrl')}</span>
+                <span class="settings-desc">${t('export.repoUrlDesc')}</span>
             </div>
-            <input type="text" id="export-url" class="auth-form-input" style="flex: 1; max-width: 400px;" placeholder="https://svn.example.com/repo/trunk">
+            <input type="text" id="export-url" class="auth-form-input" style="flex: 1; max-width: 400px;" placeholder="${t('export.repoUrlPlaceholder')}">
         </div>
         <div class="settings-row" id="export-rev-row" style="display: none;">
             <div class="settings-info">
-                <span class="settings-title">Revision</span>
-                <span class="settings-desc">Optional revision number</span>
+                <span class="settings-title">${t('export.revision')}</span>
+                <span class="settings-desc">${t('export.revisionDesc')}</span>
             </div>
             <input type="text" id="export-revision" class="auth-form-input" style="flex: 0 0 120px;" placeholder="HEAD">
         </div>
         <div class="settings-row">
             <div class="settings-info">
-                <span class="settings-title">Destination</span>
-                <span class="settings-desc">Local path to export files to</span>
+                <span class="settings-title">${t('export.destination')}</span>
+                <span class="settings-desc">${t('export.destinationDesc')}</span>
             </div>
             <div class="input-with-button" style="flex: 1; max-width: 400px;">
-                <input type="text" id="export-dest" class="auth-form-input" placeholder="/path/to/export/dir">
-                <button class="btn-secondary btn-small" onclick="browseExportDest()">Browse</button>
+                <input type="text" id="export-dest" class="auth-form-input" placeholder="${t('export.destinationPlaceholder')}">
+                <button class="btn-secondary btn-small" onclick="browseExportDest()">${t('btn.browse')}</button>
             </div>
         </div>
         <div class="settings-row" style="justify-content: flex-end;">
-            <button class="btn-primary" onclick="doExport()">Export</button>
+            <button class="btn-primary" onclick="doExport()">${t('export.export')}</button>
         </div>
     </div>`;
 
     // === Import Section ===
-    html += `<div class="section-label">Import</div>
+    html += `<div class="section-label">${t('export.import')}</div>
     <div class="settings-card">
         <div class="settings-row">
             <div class="settings-info">
-                <span class="settings-title">Local Path</span>
-                <span class="settings-desc">Local directory or file to import</span>
+                <span class="settings-title">${t('export.localPath')}</span>
+                <span class="settings-desc">${t('export.localPathDesc')}</span>
             </div>
             <div class="input-with-button" style="flex: 1; max-width: 400px;">
-                <input type="text" id="import-local-path" class="auth-form-input" placeholder="/path/to/local/dir">
-                <button class="btn-secondary btn-small" onclick="browseImportPath()">Browse</button>
+                <input type="text" id="import-local-path" class="auth-form-input" placeholder="${t('export.localPathPlaceholder')}">
+                <button class="btn-secondary btn-small" onclick="browseImportPath()">${t('btn.browse')}</button>
             </div>
         </div>
         <div class="settings-row">
             <div class="settings-info">
-                <span class="settings-title">Target URL</span>
-                <span class="settings-desc">SVN repository URL to import into</span>
+                <span class="settings-title">${t('export.targetUrl')}</span>
+                <span class="settings-desc">${t('export.targetUrlDesc')}</span>
             </div>
-            <input type="text" id="import-target-url" class="auth-form-input" style="flex: 1; max-width: 400px;" placeholder="https://svn.example.com/repo/trunk/new-folder">
+            <input type="text" id="import-target-url" class="auth-form-input" style="flex: 1; max-width: 400px;" placeholder="${t('export.targetUrlPlaceholder')}">
         </div>
         <div class="settings-row">
             <div class="settings-info">
-                <span class="settings-title">Commit Message</span>
-                <span class="settings-desc">Message for the import commit</span>
+                <span class="settings-title">${t('export.commitMessage')}</span>
+                <span class="settings-desc">${t('export.commitMessageDesc')}</span>
             </div>
-            <input type="text" id="import-message" class="auth-form-input" style="flex: 1; max-width: 400px;" placeholder="Importing files...">
+            <input type="text" id="import-message" class="auth-form-input" style="flex: 1; max-width: 400px;" placeholder="${t('export.commitMessagePlaceholder')}">
         </div>
         <div class="settings-row" style="justify-content: flex-end;">
-            <button class="btn-primary" onclick="doImport()">Import</button>
+            <button class="btn-primary" onclick="doImport()">${t('export.import')}</button>
         </div>
     </div>`;
 
@@ -3264,113 +3769,141 @@ function renderToolsView() {
     let html = '<div class="tools-container">';
 
     // === Cleanup Section ===
-    html += `<div class="section-label">SVN Cleanup</div>
+    html += `<div class="section-label">${t('tools.cleanup')}</div>
     <div class="settings-card">
         <div class="settings-row">
             <div class="settings-info">
-                <span class="settings-title">Cleanup Working Copy</span>
-                <span class="settings-desc">Remove locks, resume unfinished operations, and fix broken working copy state</span>
+                <span class="settings-title">${t('tools.cleanupWC')}</span>
+                <span class="settings-desc">${t('tools.cleanupWCDesc')}</span>
             </div>
-            <button class="btn-primary" onclick="doCleanup()">Run Cleanup</button>
+            <button class="btn-primary" onclick="doCleanup()">${t('tools.runCleanup')}</button>
         </div>
         <div class="settings-row">
             <div class="settings-info">
-                <span class="settings-title">Cleanup with Vacuum</span>
-                <span class="settings-desc">Run cleanup and also compact the working copy metadata (SQLite vacuum)</span>
+                <span class="settings-title">${t('tools.cleanupVacuum')}</span>
+                <span class="settings-desc">${t('tools.cleanupVacuumDesc')}</span>
             </div>
-            <button class="btn-secondary" onclick="doCleanup(true)">Cleanup + Vacuum</button>
+            <button class="btn-secondary" onclick="doCleanup(true)">${t('tools.runCleanupVacuum')}</button>
         </div>
         <div class="settings-row">
             <div class="settings-info">
-                <span class="settings-title">Remove Unversioned Files</span>
-                <span class="settings-desc">Remove all unversioned files and directories from the working copy</span>
+                <span class="settings-title">${t('tools.removeUnversioned')}</span>
+                <span class="settings-desc">${t('tools.removeUnversionedDesc')}</span>
             </div>
-            <button class="btn-secondary" style="color: var(--error);" onclick="doCleanupRemoveUnversioned()">Remove Unversioned</button>
+            <button class="btn-secondary" style="color: var(--error);" onclick="doCleanupRemoveUnversioned()">${t('tools.runRemoveUnversioned')}</button>
+        </div>
+    </div>`;
+
+    // === Update to Revision Section ===
+    html += `<div class="section-label">${t('tools.updateToRevision')}</div>
+    <div class="settings-card">
+        <div class="settings-row">
+            <div class="settings-info">
+                <span class="settings-title">${t('tools.updateToRevisionTitle')}</span>
+                <span class="settings-desc">${t('tools.updateToRevisionDesc')}</span>
+            </div>
+        </div>
+        <div class="settings-row" style="flex-wrap: wrap; gap: 10px;">
+            <input type="number" id="update-to-revision" class="auth-form-input" style="flex: 1; min-width: 120px;" placeholder="${t('tools.revisionPlaceholder')}" min="1">
+            <button class="btn-primary" onclick="doUpdateToRevision()">${t('tools.updateToRev')}</button>
+            <button class="btn-secondary" onclick="doUpdateToRevision(true)">${t('tools.updateHead')}</button>
+        </div>
+    </div>`;
+
+    // === Working Copy Upgrade Section ===
+    html += `<div class="section-label">${t('tools.wcUpgrade')}</div>
+    <div class="settings-card">
+        <div class="settings-row">
+            <div class="settings-info">
+                <span class="settings-title">${t('tools.wcUpgradeTitle')}</span>
+                <span class="settings-desc">${t('tools.wcUpgradeDesc')}</span>
+            </div>
+            <button class="btn-primary" onclick="doUpgradeWC()">${t('tools.upgrade')}</button>
         </div>
     </div>`;
 
     // === Relocate Section ===
-    html += `<div class="section-label">Relocate Repository</div>
+    html += `<div class="section-label">${t('tools.relocate')}</div>
     <div class="settings-card">
         <div class="settings-row">
             <div class="settings-info">
-                <span class="settings-title">Current Repository URL</span>
-                <span class="settings-desc">${escapeHtml(project.url || '(unknown — run svn info to detect)')}</span>
+                <span class="settings-title">${t('tools.currentRepoUrl')}</span>
+                <span class="settings-desc">${escapeHtml(project.url || t('tools.unknownUrl'))}</span>
             </div>
-            <button class="btn-secondary btn-small" onclick="detectRepoUrl()">Detect</button>
+            <button class="btn-secondary btn-small" onclick="detectRepoUrl()">${t('tools.detect')}</button>
         </div>
         <div class="settings-row" style="flex-wrap: wrap; gap: 10px;">
             <div class="settings-info">
-                <span class="settings-title">From URL</span>
-                <span class="settings-desc">Old repository root URL</span>
+                <span class="settings-title">${t('tools.fromUrl')}</span>
+                <span class="settings-desc">${t('tools.fromUrlDesc')}</span>
             </div>
-            <input type="text" id="relocate-from-url" class="auth-form-input" style="flex: 1; min-width: 200px;" placeholder="https://old-server.com/svn/repo" value="${escapeHtml(project.url || '')}">
+            <input type="text" id="relocate-from-url" class="auth-form-input" style="flex: 1; min-width: 200px;" placeholder="${t('tools.fromUrlPlaceholder')}" value="${escapeHtml(project.url || '')}">
         </div>
         <div class="settings-row" style="flex-wrap: wrap; gap: 10px;">
             <div class="settings-info">
-                <span class="settings-title">To URL</span>
-                <span class="settings-desc">New repository root URL</span>
+                <span class="settings-title">${t('tools.toUrl')}</span>
+                <span class="settings-desc">${t('tools.toUrlDesc')}</span>
             </div>
-            <input type="text" id="relocate-to-url" class="auth-form-input" style="flex: 1; min-width: 200px;" placeholder="https://new-server.com/svn/repo">
+            <input type="text" id="relocate-to-url" class="auth-form-input" style="flex: 1; min-width: 200px;" placeholder="${t('tools.toUrlPlaceholder')}">
         </div>
         <div class="settings-row" style="justify-content: flex-end;">
-            <button class="btn-primary" onclick="doRelocate()">Relocate</button>
+            <button class="btn-primary" onclick="doRelocate()">${t('tools.runRelocate')}</button>
         </div>
     </div>`;
 
     // === Copy / Move / Rename Section ===
-    html += `<div class="section-label">Copy / Move / Rename</div>
+    html += `<div class="section-label">${t('tools.copyMoveRename')}</div>
     <div class="settings-card">
         <div class="settings-row">
             <div class="settings-info">
-                <span class="settings-title">Operation</span>
-                <span class="settings-desc">Copy duplicates a file; Move/Rename relocates it</span>
+                <span class="settings-title">${t('tools.operation')}</span>
+                <span class="settings-desc">${t('tools.operationDesc')}</span>
             </div>
             <select id="copymove-operation" class="settings-input" onchange="onCopyMoveOpChange()">
-                <option value="copy">Copy (svn copy)</option>
-                <option value="move">Move / Rename (svn move)</option>
+                <option value="copy">${t('tools.copy')}</option>
+                <option value="move">${t('tools.move')}</option>
             </select>
         </div>
         <div class="settings-row" style="flex-wrap: wrap; gap: 10px;">
             <div class="settings-info">
-                <span class="settings-title">Source Path</span>
-                <span class="settings-desc">Relative path in working copy</span>
+                <span class="settings-title">${t('tools.sourcePath')}</span>
+                <span class="settings-desc">${t('tools.sourcePathDesc')}</span>
             </div>
-            <input type="text" id="copymove-source" class="auth-form-input" style="flex: 1; min-width: 200px;" placeholder="src/old-file.js">
+            <input type="text" id="copymove-source" class="auth-form-input" style="flex: 1; min-width: 200px;" placeholder="${t('tools.sourcePathPlaceholder')}">
         </div>
         <div class="settings-row" style="flex-wrap: wrap; gap: 10px;">
             <div class="settings-info">
-                <span class="settings-title">Destination Path</span>
-                <span class="settings-desc">New path or new name</span>
+                <span class="settings-title">${t('tools.destPath')}</span>
+                <span class="settings-desc">${t('tools.destPathDesc')}</span>
             </div>
-            <input type="text" id="copymove-dest" class="auth-form-input" style="flex: 1; min-width: 200px;" placeholder="src/new-file.js">
+            <input type="text" id="copymove-dest" class="auth-form-input" style="flex: 1; min-width: 200px;" placeholder="${t('tools.destPathPlaceholder')}">
         </div>
         <div class="settings-row" style="justify-content: flex-end;">
-            <button class="btn-primary" onclick="doCopyMove()">Execute</button>
+            <button class="btn-primary" onclick="doCopyMove()">${t('tools.execute')}</button>
         </div>
     </div>`;
 
     // === Changelist Section ===
-    html += `<div class="section-label">Changelists</div>
+    html += `<div class="section-label">${t('tools.changelists')}</div>
     <div class="settings-card">
         <div class="settings-row">
             <div class="settings-info">
-                <span class="settings-title">Add File to Changelist</span>
-                <span class="settings-desc">Organize modified files into named groups</span>
+                <span class="settings-title">${t('tools.addToChangelist')}</span>
+                <span class="settings-desc">${t('tools.addToChangelistDesc')}</span>
             </div>
         </div>
         <div class="settings-row" style="flex-wrap: wrap; gap: 10px;">
-            <input type="text" id="changelist-name" class="auth-form-input" style="flex: 1; min-width: 150px;" placeholder="Changelist name (e.g. feature-login)">
-            <input type="text" id="changelist-file" class="auth-form-input" style="flex: 2; min-width: 200px;" placeholder="File path (relative)">
-            <button class="btn-primary btn-small" onclick="addToChangelist()">Add</button>
-            <button class="btn-secondary btn-small" onclick="removeFromChangelist()">Remove</button>
+            <input type="text" id="changelist-name" class="auth-form-input" style="flex: 1; min-width: 150px;" placeholder="${t('tools.changelistPlaceholder')}">
+            <input type="text" id="changelist-file" class="auth-form-input" style="flex: 2; min-width: 200px;" placeholder="${t('tools.filePathPlaceholder')}">
+            <button class="btn-primary btn-small" onclick="addToChangelist()">${t('btn.add')}</button>
+            <button class="btn-secondary btn-small" onclick="removeFromChangelist()">${t('btn.remove')}</button>
         </div>
     </div>`;
 
     // Show current changelists
     if (Object.keys(state.changelists).length > 0) {
         for (const [clName, files] of Object.entries(state.changelists)) {
-            html += `<div class="section-label">Changelist: ${escapeHtml(clName)} (${files.length} files)</div>`;
+            html += `<div class="section-label">${t('tools.changelist', { name: escapeHtml(clName), count: files.length })}</div>`;
             html += '<div class="status-list">';
             for (const file of files) {
                 html += `<div class="status-card">
@@ -3379,13 +3912,13 @@ function renderToolsView() {
                         <span class="file-path">${escapeHtml(file)}</span>
                     </div>
                     <div class="file-actions" onclick="event.stopPropagation()">
-                        <button class="btn-secondary btn-small" style="color: var(--error);" onclick="removeFileFromChangelist('${escapeHtml(clName)}', '${escapePath(file)}')">Remove</button>
+                        <button class="btn-secondary btn-small" style="color: var(--error);" onclick="removeFileFromChangelist('${escapeHtml(clName)}', '${escapePath(file)}')">${t('btn.remove')}</button>
                     </div>
                 </div>`;
             }
             html += '</div>';
             html += `<div style="padding: 8px 0;">
-                <button class="btn-primary btn-small" onclick="commitChangelist('${escapeHtml(clName)}')">Commit Changelist</button>
+                <button class="btn-primary btn-small" onclick="commitChangelist('${escapeHtml(clName)}')">${t('tools.commitChangelist')}</button>
             </div>`;
         }
     }
@@ -3395,6 +3928,36 @@ function renderToolsView() {
 
     // Load changelists
     fetchChangelists();
+}
+
+// --- Update to Revision ---
+async function doUpdateToRevision(toHead = false) {
+    if (toHead) {
+        const success = await runSvn(['update']);
+        if (success) {
+            logToConsole('Updated to HEAD.', 'success');
+        }
+        return;
+    }
+
+    const revInput = document.getElementById('update-to-revision');
+    const rev = revInput ? revInput.value.trim() : '';
+    if (!rev) return alert('Please enter a revision number.');
+
+    if (!confirm(`Update working copy to revision r${rev}?`)) return;
+    const success = await runSvn(['update', '-r', rev]);
+    if (success) {
+        logToConsole(`Updated to revision r${rev}.`, 'success');
+    }
+}
+
+// --- Working Copy Upgrade ---
+async function doUpgradeWC() {
+    if (!confirm('Upgrade the working copy format to the latest version?\nThis operation cannot be undone.')) return;
+    const success = await runSvn(['upgrade']);
+    if (success) {
+        logToConsole('Working copy upgraded successfully.', 'success');
+    }
 }
 
 // --- Cleanup ---
@@ -3811,50 +4374,50 @@ function renderExportImportViewExtended() {
     let html = '';
 
     // === Patch Create Section ===
-    html += `<div class="section-label">Create Patch</div>
+    html += `<div class="section-label">${t('patch.createPatch')}</div>
     <div class="settings-card">
         <div class="settings-row">
             <div class="settings-info">
-                <span class="settings-title">Generate Patch from Working Copy</span>
-                <span class="settings-desc">Create a unified diff patch file from all uncommitted changes</span>
+                <span class="settings-title">${t('patch.createPatch')}</span>
+                <span class="settings-desc">${t('patch.createPatchDesc')}</span>
             </div>
-            <button class="btn-primary" onclick="createPatch()">Create Patch</button>
+            <button class="btn-primary" onclick="createPatch()">${t('patch.create')}</button>
         </div>
         <div class="settings-row">
             <div class="settings-info">
-                <span class="settings-title">Patch Specific Files</span>
-                <span class="settings-desc">Create patch only for selected files (comma-separated)</span>
+                <span class="settings-title">${t('patch.selectFile')}</span>
+                <span class="settings-desc">${t('patch.createPatchDesc')}</span>
             </div>
         </div>
         <div class="settings-row" style="flex-wrap: wrap; gap: 10px;">
-            <input type="text" id="patch-files" class="auth-form-input" style="flex: 2; min-width: 200px;" placeholder="file1.js, src/file2.py (empty = all changes)">
-            <button class="btn-secondary" onclick="createPatchForFiles()">Create Selective Patch</button>
+            <input type="text" id="patch-files" class="auth-form-input" style="flex: 2; min-width: 200px;" placeholder="file1.js, src/file2.py">
+            <button class="btn-secondary" onclick="createPatchForFiles()">${t('patch.create')}</button>
         </div>
     </div>`;
 
     // === Patch Apply Section ===
-    html += `<div class="section-label">Apply Patch</div>
+    html += `<div class="section-label">${t('patch.applyPatch')}</div>
     <div class="settings-card">
         <div class="settings-row">
             <div class="settings-info">
-                <span class="settings-title">Apply Patch File</span>
-                <span class="settings-desc">Apply a unified diff patch to the working copy</span>
+                <span class="settings-title">${t('patch.applyPatch')}</span>
+                <span class="settings-desc">${t('patch.applyPatchDesc')}</span>
             </div>
-            <button class="btn-primary" onclick="applyPatch()">Select & Apply Patch</button>
+            <button class="btn-primary" onclick="applyPatch()">${t('patch.apply')}</button>
         </div>
         <div class="settings-row">
             <div class="settings-info">
-                <span class="settings-title">Dry Run</span>
-                <span class="settings-desc">Preview what the patch would change without actually applying it</span>
+                <span class="settings-title">${t('patch.dryRun')}</span>
+                <span class="settings-desc">${t('patch.applyPatchDesc')}</span>
             </div>
-            <button class="btn-secondary" onclick="applyPatch(true)">Dry Run</button>
+            <button class="btn-secondary" onclick="applyPatch(true)">${t('patch.dryRun')}</button>
         </div>
         <div class="settings-row">
             <div class="settings-info">
-                <span class="settings-title">Reverse Patch</span>
-                <span class="settings-desc">Undo a previously applied patch</span>
+                <span class="settings-title">${t('patch.reverse')}</span>
+                <span class="settings-desc">${t('patch.applyPatchDesc')}</span>
             </div>
-            <button class="btn-secondary" onclick="applyPatch(false, true)">Reverse Apply</button>
+            <button class="btn-secondary" onclick="applyPatch(false, true)">${t('patch.reverse')}</button>
         </div>
     </div>`;
 
@@ -3931,5 +4494,1023 @@ async function applyPatch(dryRun = false, reverse = false) {
     }
 }
 
+// === Log Revision Compare & Revert ===
+function toggleLogRevisionSelect(rev) {
+    if (state.logSelectedRevisions.has(rev)) {
+        state.logSelectedRevisions.delete(rev);
+    } else {
+        if (state.logSelectedRevisions.size >= 2) {
+            state.logSelectedRevisions.clear();
+        }
+        state.logSelectedRevisions.add(rev);
+    }
+    render();
+}
+
+async function compareSelectedRevisions() {
+    if (state.logSelectedRevisions.size !== 2) {
+        logToConsole('Please select exactly 2 revisions to compare.', 'error');
+        return;
+    }
+
+    const revArr = Array.from(state.logSelectedRevisions).sort((a, b) => parseInt(a) - parseInt(b));
+    const rev1 = revArr[0];
+    const rev2 = revArr[1];
+
+    elements.diffModalTitle.textContent = `Diff: r${rev1} vs r${rev2}`;
+    elements.diffContent.innerHTML = '<div class="diff-empty"><div class="loading-spinner"></div></div>';
+    elements.diffModal.classList.remove('hidden');
+
+    const result = await runSvnSilent(['diff', '-r', `${rev1}:${rev2}`]);
+    if (result && result.output && result.output.trim()) {
+        lastDiffRawOutput = result.output;
+        renderDiffContent();
+    } else {
+        elements.diffContent.innerHTML = '<div class="diff-empty">No differences found between the two revisions.</div>';
+    }
+}
+
+async function revertToRevision(rev) {
+    if (!confirm(`Revert working copy to revision r${rev}?\nThis will merge changes from HEAD back to r${rev}.`)) return;
+    const success = await runSvn(['merge', '-r', `HEAD:${rev}`, '.']);
+    if (success) {
+        logToConsole(`Reverted working copy to r${rev}. Review changes and commit.`, 'success');
+    }
+}
+
+async function revertRevisionChange(rev) {
+    if (!confirm(`Undo changes from revision r${rev}?\nThis will reverse-merge that specific revision.`)) return;
+    const success = await runSvn(['merge', '-c', `-${rev}`, '.']);
+    if (success) {
+        logToConsole(`Reverted changes from r${rev}. Review changes and commit.`, 'success');
+    }
+}
+
+// === Remote URL Log ===
+async function fetchRemoteLog() {
+    const urlInput = document.getElementById('remote-log-url');
+    const url = urlInput ? urlInput.value.trim() : '';
+    if (!url) return alert('Please enter a remote SVN URL.');
+
+    if (state.currentOperation) await waitForOperation();
+
+    state.isScanning = true;
+    render();
+
+    const limit = state.logPage * state.logLimit;
+    const cwd = state.selectedProjectIndex >= 0 ? state.projects[state.selectedProjectIndex].path : null;
+    const projectUrl = state.selectedProjectIndex >= 0 ? state.projects[state.selectedProjectIndex].url : null;
+
+    showOperation('Fetching remote log...');
+    try {
+        const result = await window.api.runSvn(['log', '-l', String(limit), '-v', url], cwd, projectUrl);
+        hideOperation();
+        state.isScanning = false;
+        if (result && result.success) {
+            parseLogEntries(result.output || '');
+            logToConsole(`Fetched remote log from: ${url}`, 'success');
+        } else {
+            state.logEntries = [];
+            logToConsole(`Failed to fetch remote log: ${result ? result.error : 'Unknown error'}`, 'error');
+        }
+    } catch (err) {
+        hideOperation();
+        state.isScanning = false;
+        state.logEntries = [];
+        logToConsole(`Failed: ${err.message}`, 'error');
+    }
+    render();
+}
+
+// === Commit Filter ===
+let _commitFilterTimer = null;
+
+function onCommitFilterChange() {
+    clearTimeout(_commitFilterTimer);
+    _commitFilterTimer = setTimeout(() => {
+        const input = document.getElementById('commit-filter-input');
+        state.commitFilter = input ? input.value.trim() : '';
+        render();
+    }, 200);
+}
+
+function clearCommitFilter() {
+    state.commitFilter = '';
+    render();
+}
+
+// =============================================
+// === Repository Browser ===
+// =============================================
+function renderRepoBrowser() {
+    const project = state.projects[state.selectedProjectIndex];
+    if (!project) {
+        elements.contentArea.innerHTML = '<div class="empty-state"><p>No project selected.</p></div>';
+        return;
+    }
+
+    let html = '<div class="repo-browser-container">';
+
+    // URL input
+    html += `<div class="section-label">${t('repo.repoUrl')}</div>
+    <div class="auth-form">
+        <div class="auth-form-row">
+            <input type="text" id="repo-browser-url" class="auth-form-input" style="flex:3" placeholder="${t('repo.urlPlaceholder')}" value="${escapeHtml(state.repoBrowserPath || project.url || '')}">
+            <button class="btn-primary btn-small" onclick="browseRepoFromInput()">${t('btn.browse')}</button>
+        </div>
+    </div>`;
+
+    // Breadcrumb
+    if (state.repoBrowserPath) {
+        html += `<div class="section-label">${t('repo.path')}</div>`;
+        html += '<div class="settings-card" style="padding: 10px 16px;">';
+        const parts = state.repoBrowserPath.replace(/\/$/, '').split('/');
+        let breadcrumbHtml = '';
+        for (let i = 0; i < parts.length; i++) {
+            const pathSoFar = parts.slice(0, i + 1).join('/');
+            if (i >= 3) { // Skip protocol parts (http:, , host)
+                if (breadcrumbHtml) breadcrumbHtml += ' <span style="color: var(--text-dim); margin: 0 4px;">/</span> ';
+                breadcrumbHtml += `<a href="#" onclick="navigateRepoBrowser('${escapePath(pathSoFar)}/'); return false;" style="color: var(--accent); text-decoration: none;">${escapeHtml(parts[i])}</a>`;
+            }
+        }
+        if (!breadcrumbHtml) breadcrumbHtml = escapeHtml(state.repoBrowserPath);
+        html += `<div style="font-family: monospace; font-size: 13px;">${breadcrumbHtml}</div>`;
+        html += '</div>';
+    }
+
+    // Directory listing
+    if (state.repoBrowserEntries && state.repoBrowserEntries.length > 0) {
+        html += `<div class="section-label">${t('repo.contents', { count: state.repoBrowserEntries.length })}</div>`;
+        html += '<div class="status-list">';
+        for (const entry of state.repoBrowserEntries) {
+            const isDir = entry.type === 'dir';
+            const icon = isDir ? '📁' : '📄';
+            const fullUrl = state.repoBrowserPath.endsWith('/')
+                ? state.repoBrowserPath + entry.name
+                : state.repoBrowserPath + '/' + entry.name;
+            const ep = escapePath(fullUrl);
+
+            html += `<div class="status-card" ${isDir ? `onclick="navigateRepoBrowser('${ep}/')" style="cursor: pointer;"` : ''}>
+                <div class="file-info">
+                    <span style="margin-right: 8px; font-size: 16px;">${icon}</span>
+                    <span class="file-path">${escapeHtml(entry.name)}${isDir ? '/' : ''}</span>
+                </div>
+                <div class="file-actions" onclick="event.stopPropagation()">
+                    <button class="btn-secondary btn-small" onclick="repoBrowserCopyTo('${ep}')">${t('repo.copyTo')}</button>
+                </div>
+            </div>`;
+        }
+        html += '</div>';
+    } else if (state.repoBrowserEntries) {
+        html += `<div class="empty-state" style="padding: 48px 0;"><p>${t('repo.emptyDir')}</p></div>`;
+    }
+
+    html += '</div>';
+    elements.contentArea.innerHTML = html;
+}
+
+function browseRepoFromInput() {
+    const urlInput = document.getElementById('repo-browser-url');
+    const url = urlInput ? urlInput.value.trim() : '';
+    if (!url) return alert('Please enter a repository URL.');
+    browseRepo(url);
+}
+
+async function browseRepo(url) {
+    if (!url) return;
+    logToConsole(`Browsing: ${url}`, 'system');
+
+    const result = await runSvnSilent(['list', url]);
+    if (!result || !result.output) {
+        logToConsole(`Failed to browse: ${url}`, 'error');
+        state.repoBrowserPath = url;
+        state.repoBrowserEntries = [];
+        render();
+        return;
+    }
+
+    const entries = [];
+    const lines = result.output.trim().split('\n');
+    for (const line of lines) {
+        if (!line.trim()) continue;
+        const isDir = line.endsWith('/');
+        const name = isDir ? line.slice(0, -1) : line;
+        entries.push({ name, type: isDir ? 'dir' : 'file' });
+    }
+
+    state.repoBrowserPath = url;
+    state.repoBrowserEntries = entries;
+    logToConsole(`Found ${entries.length} entries in ${url}`, 'success');
+    render();
+}
+
+function navigateRepoBrowser(path) {
+    browseRepo(path);
+}
+
+async function repoBrowserCopyTo(sourceUrl) {
+    const dest = prompt('Enter destination URL for svn copy:', '');
+    if (!dest || !dest.trim()) return;
+
+    const msg = prompt('Enter commit message:', `Copy from ${sourceUrl}`);
+    if (msg === null) return;
+
+    const commitMsg = msg.trim() || `Copy from ${sourceUrl}`;
+    const success = await runSvn(['copy', sourceUrl, dest.trim(), '-m', commitMsg]);
+    if (success) {
+        logToConsole(`Copied ${sourceUrl} to ${dest.trim()}`, 'success');
+    }
+}
+
+// =============================================
+// === Shelve / Unshelve ===
+// =============================================
+function renderShelveView() {
+    const project = state.projects[state.selectedProjectIndex];
+    if (!project) {
+        elements.contentArea.innerHTML = '<div class="empty-state"><p>No project selected.</p></div>';
+        return;
+    }
+
+    let html = '<div class="shelve-container">';
+
+    // Info
+    html += `<div class="section-label">${t('shelve.shelveChanges')}</div>
+    <div class="settings-card">
+        <div class="settings-row">
+            <div class="settings-info">
+                <span class="settings-title">${t('shelve.shelveAll')}</span>
+                <span class="settings-desc">${t('shelve.shelveAllDesc')}</span>
+            </div>
+        </div>
+        <div class="settings-row" style="flex-wrap: wrap; gap: 10px;">
+            <input type="text" id="shelve-name-input" class="auth-form-input" style="flex: 2; min-width: 200px;" placeholder="${t('shelve.namePlaceholder')}">
+            <button class="btn-primary" onclick="doShelve()">${t('shelve.shelveButton')}</button>
+        </div>
+    </div>`;
+
+    // Existing shelves
+    html += `<div class="section-label">${t('shelve.existingShelves', { count: state.shelveList.length })}</div>`;
+    if (state.shelveList.length === 0) {
+        html += `<div class="empty-state" style="padding: 48px 0;"><p>${t('shelve.noShelves')}</p></div>`;
+    } else {
+        html += '<div class="status-list">';
+        for (const shelf of state.shelveList) {
+            const ep = escapePath(shelf.name);
+            html += `<div class="status-card" style="padding: 14px 16px;">
+                <div class="file-info">
+                    <span style="margin-right: 8px; font-size: 16px;">📌</span>
+                    <div>
+                        <span class="file-path" style="font-weight: 600;">${escapeHtml(shelf.name)}</span>
+                        <div style="font-size: 12px; color: var(--text-dim); margin-top: 2px;">
+                            ${shelf.type === 'native' ? t('shelve.nativeShelf') : t('shelve.patchShelf')}
+                            ${shelf.date ? ` — ${new Date(shelf.date).toLocaleString()}` : ''}
+                            ${shelf.fileCount ? ` — ${shelf.fileCount} file(s)` : ''}
+                        </div>
+                    </div>
+                </div>
+                <div class="file-actions" style="display: flex; gap: 8px;">
+                    <button class="btn-primary btn-small" onclick="doUnshelve('${ep}')">${t('shelve.unshelve')}</button>
+                    <button class="btn-secondary btn-small" style="color: var(--error);" onclick="if(confirm('Delete shelf \\'${ep}\\' permanently?')) deleteShelve('${ep}')">${t('btn.delete')}</button>
+                </div>
+            </div>`;
+        }
+        html += '</div>';
+    }
+
+    html += '</div>';
+    elements.contentArea.innerHTML = html;
+}
+
+async function fetchShelveList() {
+    const project = state.projects[state.selectedProjectIndex];
+    if (!project) {
+        state.shelveList = [];
+        render();
+        return;
+    }
+
+    // Try native SVN shelves command first
+    const cwd = project.path;
+    const url = project.url;
+
+    if (state.currentOperation) await waitForOperation();
+    showOperation('Loading shelves...');
+
+    try {
+        const result = await window.api.runSvn(['shelves'], cwd, url);
+        hideOperation();
+
+        if (result && result.success && result.output && result.output.trim()) {
+            const shelves = [];
+            const lines = result.output.trim().split('\n').filter(l => l.trim());
+            for (const line of lines) {
+                const name = line.trim().replace(/\s*\(version \d+\)$/, '');
+                if (name) shelves.push({ name, type: 'native', date: null, fileCount: 0 });
+            }
+            state.shelveList = shelves;
+        } else {
+            // Fallback: check for local patch-based shelves
+            state.shelveList = await loadPatchShelves(project.path);
+        }
+    } catch (err) {
+        hideOperation();
+        state.shelveList = await loadPatchShelves(project.path);
+    }
+    render();
+}
+
+async function loadPatchShelves(projectPath) {
+    const shelvesDir = projectPath + '/.svn-shelves';
+    try {
+        const result = await window.api.listDirectory(shelvesDir);
+        if (!result || !result.success) return [];
+
+        const shelves = [];
+        for (const item of result.items) {
+            if (item.name.endsWith('.patch')) {
+                const name = item.name.replace('.patch', '');
+                let metadata = { date: null, fileCount: 0 };
+                // Try reading metadata
+                try {
+                    const metaPath = shelvesDir + '/' + name + '.meta.json';
+                    // We don't have a direct readFile API, but we can try
+                    metadata = { date: null, fileCount: 0 };
+                } catch (e) { }
+                shelves.push({ name, type: 'patch', date: metadata.date, fileCount: metadata.fileCount });
+            }
+        }
+        return shelves;
+    } catch (e) {
+        return [];
+    }
+}
+
+async function doShelve() {
+    const project = state.projects[state.selectedProjectIndex];
+    if (!project) return;
+
+    const nameInput = document.getElementById('shelve-name-input');
+    const name = nameInput ? nameInput.value.trim() : '';
+    if (!name) return alert('Please enter a name for the shelf.');
+
+    // Try native shelve first
+    const nativeResult = await runSvnSilent(['shelve', name]);
+    if (nativeResult && nativeResult.success) {
+        logToConsole(`Shelved changes as "${name}" (native SVN).`, 'success');
+        if (nameInput) nameInput.value = '';
+        await fetchShelveList();
+        refreshStatus();
+        return;
+    }
+
+    // Fallback: patch-based shelve
+    logToConsole('Native shelve not supported. Using patch-based fallback...', 'system');
+    const diffResult = await runSvnSilent(['diff']);
+    if (!diffResult || !diffResult.output || !diffResult.output.trim()) {
+        logToConsole('No changes to shelve.', 'warning');
+        return;
+    }
+
+    const shelvesDir = project.path + '/.svn-shelves';
+    const patchPath = shelvesDir + '/' + name + '.patch';
+
+    // Ensure directory exists and write patch
+    try {
+        await window.api.writeFile(patchPath, diffResult.output);
+        logToConsole(`Patch saved to: ${patchPath}`, 'success');
+
+        // Revert working copy
+        if (confirm('Shelf created. Revert all working copy changes now?')) {
+            await runSvn(['revert', '-R', '.']);
+            logToConsole(`Shelved changes as "${name}" (patch-based). Working copy reverted.`, 'success');
+        }
+
+        if (nameInput) nameInput.value = '';
+        await fetchShelveList();
+    } catch (err) {
+        logToConsole(`Failed to create shelf: ${err.message}`, 'error');
+    }
+}
+
+async function doUnshelve(name) {
+    const project = state.projects[state.selectedProjectIndex];
+    if (!project) return;
+
+    const shelf = state.shelveList.find(s => s.name === name);
+    if (!shelf) return;
+
+    if (shelf.type === 'native') {
+        const success = await runSvn(['unshelve', name]);
+        if (success) {
+            logToConsole(`Unshelved "${name}".`, 'success');
+            await fetchShelveList();
+            refreshStatus();
+        }
+    } else {
+        // Patch-based unshelve
+        const patchPath = project.path + '/.svn-shelves/' + name + '.patch';
+        const success = await runSvn(['patch', patchPath]);
+        if (success) {
+            logToConsole(`Unshelved "${name}" (applied patch).`, 'success');
+            // Delete the patch file after successful apply
+            try {
+                await window.api.deleteFile(patchPath, null);
+            } catch (e) { }
+            await fetchShelveList();
+            refreshStatus();
+        }
+    }
+}
+
+async function deleteShelve(name) {
+    const project = state.projects[state.selectedProjectIndex];
+    if (!project) return;
+
+    const shelf = state.shelveList.find(s => s.name === name);
+    if (!shelf) return;
+
+    if (shelf.type === 'native') {
+        const success = await runSvn(['shelve', '--delete', name]);
+        if (success) {
+            logToConsole(`Deleted shelf "${name}".`, 'success');
+            await fetchShelveList();
+        }
+    } else {
+        const patchPath = project.path + '/.svn-shelves/' + name + '.patch';
+        try {
+            await window.api.deleteFile(patchPath, null);
+            logToConsole(`Deleted shelf "${name}".`, 'success');
+            await fetchShelveList();
+        } catch (e) {
+            logToConsole(`Failed to delete shelf: ${e.message}`, 'error');
+        }
+    }
+}
+
+// === Quick Ignore from Status View ===
+async function quickAddIgnoreFromStatus(filePath) {
+    const fileName = filePath.split('/').pop();
+    const dirPath = filePath.includes('/') ? filePath.substring(0, filePath.lastIndexOf('/')) : '.';
+
+    // Get existing svn:ignore for the directory
+    const result = await runSvnSilent(['propget', 'svn:ignore', dirPath]);
+    let existing = [];
+    if (result && result.output) {
+        existing = result.output.split('\n').filter(l => l.trim());
+    }
+
+    if (existing.includes(fileName)) {
+        logToConsole(`'${fileName}' is already in svn:ignore for '${dirPath}'.`, 'warning');
+        return;
+    }
+
+    existing.push(fileName);
+    const value = existing.join('\n');
+    const success = await runSvn(['propset', 'svn:ignore', value, dirPath]);
+    if (success) {
+        logToConsole(`Added '${fileName}' to svn:ignore in '${dirPath}'.`, 'success');
+    }
+}
+
+// =============================================
+// === SVN Externals Management ===
+// =============================================
+
+async function fetchExternals() {
+    const project = state.projects[state.selectedProjectIndex];
+    if (!project) {
+        render();
+        return;
+    }
+
+    state.isScanning = true;
+    render();
+
+    const target = state.externalsTarget || '.';
+    const result = await runSvnSilent(['propget', 'svn:externals', target]);
+
+    if (result && result.output && result.output.trim()) {
+        state.externals = parseExternals(result.output);
+    } else {
+        state.externals = [];
+    }
+
+    state.isScanning = false;
+    render();
+}
+
+function parseExternals(output) {
+    const externals = [];
+    const lines = output.split('\n').filter(l => l.trim());
+
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) continue;
+
+        let url = '', localDir = '', revision = '', pegRevision = '';
+
+        // Format 1: [-rREV] URL[@PEG] LOCAL_DIR
+        // Format 2: LOCAL_DIR [-rREV] URL[@PEG]
+        // Detect by checking if first token is a URL (contains ://)
+        const tokens = trimmed.split(/\s+/);
+
+        let revToken = '';
+        const nonRevTokens = [];
+        for (const tok of tokens) {
+            if (tok.startsWith('-r')) {
+                revToken = tok.replace('-r', '');
+            } else {
+                nonRevTokens.push(tok);
+            }
+        }
+
+        if (nonRevTokens.length >= 2) {
+            let urlPart, dirPart;
+            if (nonRevTokens[0].includes('://') || nonRevTokens[0].startsWith('^/')) {
+                // Format 1: URL LOCAL_DIR
+                urlPart = nonRevTokens[0];
+                dirPart = nonRevTokens[1];
+            } else {
+                // Format 2: LOCAL_DIR URL
+                dirPart = nonRevTokens[0];
+                urlPart = nonRevTokens[1];
+            }
+
+            // Parse peg revision from URL
+            const pegMatch = urlPart.match(/^(.+)@(\d+)$/);
+            if (pegMatch) {
+                url = pegMatch[1];
+                pegRevision = pegMatch[2];
+            } else {
+                url = urlPart;
+            }
+            localDir = dirPart;
+            revision = revToken;
+        } else if (nonRevTokens.length === 1) {
+            url = nonRevTokens[0];
+            localDir = nonRevTokens[0].split('/').pop();
+        }
+
+        externals.push({ url, localDir, revision, pegRevision, raw: trimmed });
+    }
+    return externals;
+}
+
+function renderExternalsView() {
+    const project = state.projects[state.selectedProjectIndex];
+    if (!project) {
+        elements.contentArea.innerHTML = `<div class="empty-state"><p>${t('msg.noProjectSelected')}</p></div>`;
+        return;
+    }
+
+    let html = '<div class="externals-container">';
+
+    // Target selector
+    html += `<div class="section-label">${t('ext.targetDirectory')}</div>
+    <div class="auth-form">
+        <div class="auth-form-row">
+            <input type="text" id="ext-target-input" class="auth-form-input" style="flex:3" placeholder="Directory path (relative, e.g. '.' or 'src')" value="${escapeHtml(state.externalsTarget)}">
+            <button class="btn-primary btn-small" onclick="changeExternalsTarget()">${t('btn.load')}</button>
+        </div>
+    </div>`;
+
+    // Add external form
+    html += `<div class="section-label">${t('ext.addExternal')}</div>
+    <div class="auth-form">
+        <div class="auth-form-row">
+            <input type="text" id="ext-new-url" class="auth-form-input" style="flex:3" placeholder="${t('ext.urlPlaceholder')}">
+        </div>
+        <div class="auth-form-row">
+            <input type="text" id="ext-new-localdir" class="auth-form-input" style="flex:2" placeholder="${t('ext.localDirPlaceholder')}">
+            <input type="text" id="ext-new-revision" class="auth-form-input" style="flex:1" placeholder="${t('ext.revisionPlaceholder')}">
+            <button class="btn-primary btn-small" onclick="addExternal()">${t('btn.addExternal')}</button>
+        </div>
+    </div>`;
+
+    // Current externals list
+    html += `<div class="section-label">${t('ext.currentExternals')} (${state.externals.length})</div>`;
+
+    if (state.externals.length === 0) {
+        html += `<div class="empty-state" style="padding: 48px 0;"><p>${t('ext.noExternals')}</p></div>`;
+    } else {
+        html += '<div class="status-list">';
+        for (let i = 0; i < state.externals.length; i++) {
+            const ext = state.externals[i];
+            const revInfo = ext.revision ? ` @ r${ext.revision}` : (ext.pegRevision ? ` @${ext.pegRevision}` : '');
+            html += `
+                <div class="status-card">
+                    <div class="file-info" style="flex-direction: column; align-items: flex-start; gap: 4px;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span class="file-badge badge-added">🔗</span>
+                            <span class="file-path" style="font-family: monospace; font-size: 13px;">${escapeHtml(ext.localDir)}</span>
+                            <span style="color: var(--text-dim); font-size: 12px;">${revInfo}</span>
+                        </div>
+                        <div style="padding-left: 36px; color: var(--text-dim); font-size: 12px; word-break: break-all;">${escapeHtml(ext.url)}</div>
+                    </div>
+                    <div class="file-actions" onclick="event.stopPropagation()">
+                        <button class="btn-secondary btn-small" onclick="editExternal(${i})">${t('btn.edit')}</button>
+                        <button class="btn-secondary btn-small" style="color: var(--error);" onclick="removeExternal(${i})">${t('btn.remove')}</button>
+                    </div>
+                </div>`;
+        }
+        html += '</div>';
+    }
+
+    // Edit raw
+    html += `<div class="section-label">${t('ext.editRaw')}</div>
+    <div class="auth-form">
+        <textarea id="ext-raw-textarea" class="commit-textarea" style="min-height: 120px; font-family: monospace;">${escapeHtml(state.externals.map(e => e.raw || buildExternalLine(e)).join('\n'))}</textarea>
+        <div style="padding: 8px 0; display: flex; gap: 8px; justify-content: flex-end; align-items: center;">
+            <span style="color: var(--text-dim); font-size: 12px;">${t('ext.updateAfterSave')}</span>
+            <button class="btn-primary btn-small" onclick="saveExternalsRaw()">${t('btn.saveRaw')}</button>
+            <button class="btn-secondary btn-small" onclick="updateExternals()">${t('btn.updateExternals')}</button>
+        </div>
+    </div>`;
+
+    html += '</div>';
+    elements.contentArea.innerHTML = html;
+}
+
+function buildExternalLine(ext) {
+    let line = '';
+    if (ext.revision) line += `-r${ext.revision} `;
+    line += ext.url;
+    if (ext.pegRevision) line += `@${ext.pegRevision}`;
+    line += ` ${ext.localDir}`;
+    return line;
+}
+
+function changeExternalsTarget() {
+    const input = document.getElementById('ext-target-input');
+    if (input) {
+        state.externalsTarget = input.value.trim() || '.';
+        fetchExternals();
+    }
+}
+
+async function addExternal() {
+    const urlInput = document.getElementById('ext-new-url');
+    const dirInput = document.getElementById('ext-new-localdir');
+    const revInput = document.getElementById('ext-new-revision');
+
+    const url = urlInput ? urlInput.value.trim() : '';
+    const localDir = dirInput ? dirInput.value.trim() : '';
+    const revision = revInput ? revInput.value.trim() : '';
+
+    if (!url) return alert('Repository URL is required.');
+    if (!localDir) return alert('Local directory is required.');
+
+    const newExt = { url, localDir, revision, pegRevision: '', raw: '' };
+    newExt.raw = buildExternalLine(newExt);
+
+    const allExternals = [...state.externals, newExt];
+    const value = allExternals.map(e => e.raw || buildExternalLine(e)).join('\n');
+    const target = state.externalsTarget || '.';
+
+    const success = await runSvn(['propset', 'svn:externals', value, target]);
+    if (success) {
+        state.externals = allExternals;
+        logToConsole(`Added external: ${localDir} → ${url}`, 'success');
+        render();
+    }
+}
+
+async function removeExternal(index) {
+    const ext = state.externals[index];
+    if (!confirm(`Remove external '${ext.localDir}'?`)) return;
+
+    const newExternals = state.externals.filter((_, i) => i !== index);
+    const target = state.externalsTarget || '.';
+
+    if (newExternals.length === 0) {
+        const success = await runSvn(['propdel', 'svn:externals', target]);
+        if (success) {
+            state.externals = [];
+            logToConsole(`Removed external: ${ext.localDir}`, 'success');
+            render();
+        }
+    } else {
+        const value = newExternals.map(e => e.raw || buildExternalLine(e)).join('\n');
+        const success = await runSvn(['propset', 'svn:externals', value, target]);
+        if (success) {
+            state.externals = newExternals;
+            logToConsole(`Removed external: ${ext.localDir}`, 'success');
+            render();
+        }
+    }
+}
+
+function editExternal(index) {
+    const ext = state.externals[index];
+    const newUrl = prompt('Repository URL:', ext.url);
+    if (newUrl === null) return;
+    const newDir = prompt('Local Directory:', ext.localDir);
+    if (newDir === null) return;
+    const newRev = prompt('Revision (leave empty for HEAD):', ext.revision || '');
+    if (newRev === null) return;
+
+    const updated = { ...ext, url: newUrl.trim(), localDir: newDir.trim(), revision: newRev.trim() };
+    updated.raw = buildExternalLine(updated);
+
+    const allExternals = [...state.externals];
+    allExternals[index] = updated;
+
+    const value = allExternals.map(e => e.raw || buildExternalLine(e)).join('\n');
+    const target = state.externalsTarget || '.';
+
+    runSvn(['propset', 'svn:externals', value, target]).then(success => {
+        if (success) {
+            state.externals = allExternals;
+            logToConsole(`Updated external: ${updated.localDir}`, 'success');
+            render();
+        }
+    });
+}
+
+async function saveExternalsRaw() {
+    const textarea = document.getElementById('ext-raw-textarea');
+    const raw = textarea ? textarea.value : '';
+    const target = state.externalsTarget || '.';
+
+    const lines = raw.split('\n').filter(l => l.trim());
+
+    if (lines.length === 0) {
+        const success = await runSvn(['propdel', 'svn:externals', target]);
+        if (success) {
+            state.externals = [];
+            logToConsole('All externals removed.', 'success');
+            render();
+        }
+    } else {
+        const value = lines.join('\n');
+        const success = await runSvn(['propset', 'svn:externals', value, target]);
+        if (success) {
+            state.externals = parseExternals(value);
+            logToConsole('Externals saved.', 'success');
+            render();
+        }
+    }
+}
+
+async function updateExternals() {
+    const success = await runSvn(['update']);
+    if (success) {
+        logToConsole('Externals updated via svn update.', 'success');
+        fetchExternals();
+    }
+}
+
+// =============================================
+// === Drag & Drop File Operations ===
+// =============================================
+
+function setupDragDrop() {
+    const contentArea = elements.contentArea;
+    if (!contentArea) return;
+
+    // External file drop on content area
+    contentArea.addEventListener('dragover', onContentDragOver);
+    contentArea.addEventListener('dragleave', onContentDragLeave);
+    contentArea.addEventListener('drop', onContentDrop);
+}
+
+function onContentDragOver(e) {
+    // Only handle in specific views
+    const view = state.currentView;
+    if (view !== 'status' && view !== 'commit-view' && view !== 'revert-view') return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    const contentArea = elements.contentArea;
+    if (!contentArea.classList.contains('drag-over')) {
+        contentArea.classList.add('drag-over');
+
+        // Show drop zone overlay if not already shown
+        if (!document.getElementById('drop-zone-overlay')) {
+            const overlay = document.createElement('div');
+            overlay.id = 'drop-zone-overlay';
+            overlay.className = 'drop-zone-active';
+            overlay.innerHTML = `<div class="drop-zone-message">
+                <span class="drop-zone-icon">📥</span>
+                <span>${t('dnd.dropFilesHere')}</span>
+            </div>`;
+            contentArea.appendChild(overlay);
+        }
+    }
+}
+
+function onContentDragLeave(e) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Only remove if leaving the content area entirely
+    const rect = elements.contentArea.getBoundingClientRect();
+    if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
+        removeDropOverlay();
+    }
+}
+
+function onContentDrop(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    removeDropOverlay();
+
+    const view = state.currentView;
+    if (view !== 'status' && view !== 'commit-view' && view !== 'revert-view') return;
+
+    const project = state.projects[state.selectedProjectIndex];
+    if (!project) return;
+
+    // Handle external file drops
+    const files = e.dataTransfer.files;
+    if (files && files.length > 0) {
+        handleExternalFileDrop(files, project);
+    }
+
+    // Handle internal card drops (file paths in dataTransfer)
+    const filePaths = e.dataTransfer.getData('text/plain');
+    if (filePaths) {
+        const paths = filePaths.split('\n').filter(p => p.trim());
+        for (const path of paths) {
+            if (!state.selectedFiles.has(path)) {
+                state.selectedFiles.add(path);
+            }
+        }
+        updateBulkUI();
+        render();
+    }
+}
+
+function removeDropOverlay() {
+    elements.contentArea.classList.remove('drag-over');
+    const overlay = document.getElementById('drop-zone-overlay');
+    if (overlay) overlay.remove();
+}
+
+async function handleExternalFileDrop(files, project) {
+    const cwd = project.path;
+    let addedCount = 0;
+
+    for (const file of files) {
+        const filePath = file.path || file.name;
+        if (!filePath) continue;
+
+        // Copy file to working copy directory
+        try {
+            const fileName = filePath.split('/').pop();
+            const targetPath = cwd + '/' + fileName;
+
+            // Copy file via IPC
+            const copyResult = await window.api.copyFile(filePath, targetPath);
+            if (!copyResult.success) {
+                logToConsole(`Failed to copy file: ${copyResult.error}`, 'error');
+                continue;
+            }
+
+            // svn add the file
+            const addResult = await window.api.runSvn(['add', fileName], cwd, null);
+            if (addResult.success) {
+                addedCount++;
+                logToConsole(`Added dropped file: ${fileName}`, 'success');
+            }
+        } catch (err) {
+            logToConsole(`Failed to add dropped file: ${err.message}`, 'error');
+        }
+    }
+
+    if (addedCount > 0) {
+        refreshStatus();
+    }
+}
+
+function makeCardsDraggable() {
+    // Called after rendering status/commit/revert views
+    const cards = document.querySelectorAll('.status-card');
+    cards.forEach(card => {
+        card.setAttribute('draggable', 'true');
+        card.addEventListener('dragstart', onCardDragStart);
+        card.addEventListener('dragend', onCardDragEnd);
+    });
+}
+
+function onCardDragStart(e) {
+    const card = e.currentTarget;
+    card.classList.add('dragging');
+
+    // Collect file paths of selected files, or just this card's file
+    const filePath = card.querySelector('.file-path');
+    if (filePath) {
+        const path = filePath.textContent;
+        if (state.selectedFiles.size > 0 && state.selectedFiles.has(path)) {
+            // Drag all selected files
+            e.dataTransfer.setData('text/plain', Array.from(state.selectedFiles).join('\n'));
+        } else {
+            e.dataTransfer.setData('text/plain', path);
+        }
+    }
+
+    e.dataTransfer.effectAllowed = 'move';
+
+    // Create ghost image
+    const ghost = document.createElement('div');
+    ghost.className = 'drag-ghost';
+    const count = state.selectedFiles.size > 1 ? state.selectedFiles.size : 1;
+    ghost.textContent = `${count} file${count > 1 ? 's' : ''}`;
+    document.body.appendChild(ghost);
+    e.dataTransfer.setDragImage(ghost, 0, 0);
+    setTimeout(() => ghost.remove(), 0);
+}
+
+function onCardDragEnd(e) {
+    e.currentTarget.classList.remove('dragging');
+    document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+}
+
+// Tree view drag & drop for svn move
+function makeTreeNodesDraggable() {
+    const fileNodes = document.querySelectorAll('.tree-node-file');
+    const folderNodes = document.querySelectorAll('.tree-node:not(.tree-node-file)');
+
+    fileNodes.forEach(node => {
+        node.setAttribute('draggable', 'true');
+        node.addEventListener('dragstart', onTreeDragStart);
+        node.addEventListener('dragend', onTreeDragEnd);
+    });
+
+    folderNodes.forEach(node => {
+        node.addEventListener('dragover', onTreeFolderDragOver);
+        node.addEventListener('dragleave', onTreeFolderDragLeave);
+        node.addEventListener('drop', onTreeFolderDrop);
+    });
+}
+
+function onTreeDragStart(e) {
+    e.stopPropagation();
+    const nameEl = e.currentTarget.querySelector('.tree-name');
+    if (nameEl) {
+        e.dataTransfer.setData('text/x-tree-path', nameEl.textContent);
+        e.dataTransfer.effectAllowed = 'move';
+        e.currentTarget.classList.add('dragging');
+    }
+}
+
+function onTreeDragEnd(e) {
+    e.currentTarget.classList.remove('dragging');
+    document.querySelectorAll('.tree-drop-target').forEach(el => el.classList.remove('tree-drop-target'));
+}
+
+function onTreeFolderDragOver(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    e.currentTarget.classList.add('tree-drop-target');
+}
+
+function onTreeFolderDragLeave(e) {
+    e.stopPropagation();
+    e.currentTarget.classList.remove('tree-drop-target');
+}
+
+async function onTreeFolderDrop(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    e.currentTarget.classList.remove('tree-drop-target');
+
+    const sourcePath = e.dataTransfer.getData('text/x-tree-path');
+    if (!sourcePath) return;
+
+    const targetNameEl = e.currentTarget.querySelector('.tree-name');
+    if (!targetNameEl) return;
+    const targetPath = targetNameEl.textContent;
+
+    if (sourcePath === targetPath) return;
+
+    if (!confirm(t('dnd.moveConfirm', { source: sourcePath, target: targetPath }))) return;
+
+    const success = await runSvn(['move', sourcePath, targetPath + '/' + sourcePath]);
+    if (success) {
+        logToConsole(`Moved '${sourcePath}' to '${targetPath}/'`, 'success');
+        fetchTree();
+    }
+}
+
+// Post-render hook for drag & drop
+function postRenderDragDrop() {
+    const view = state.currentView;
+    if (view === 'status' || view === 'commit-view' || view === 'revert-view') {
+        makeCardsDraggable();
+    } else if (view === 'tree') {
+        makeTreeNodesDraggable();
+    }
+}
+
 // Start
+setupDragDrop();
 init();
+
+// MutationObserver to set up drag-drop on newly rendered elements
+const _renderObserver = new MutationObserver(() => {
+    postRenderDragDrop();
+});
+_renderObserver.observe(elements.contentArea, { childList: true });

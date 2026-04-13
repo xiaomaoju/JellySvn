@@ -45,8 +45,8 @@ if [ -z "$SVN_ROOT" ]; then
     exit 0
 fi
 
-# Progress notification (brief, doesn't need to persist)
-osascript -e "display notification \"Updating working copy...\" with title \"JELLYSVN Update\" subtitle \"$(basename "$FOLDER")\""
+# Progress notification
+osascript -e "display notification \"Updating working copy...\" with title \"🔄 JellySvn\" subtitle \"$(basename "$FOLDER")\""
 
 # Run svn update
 UPDATE_OUTPUT=$("$SVN" update "$FOLDER" --non-interactive --trust-server-cert 2>&1)
@@ -72,4 +72,4 @@ if [ "$UPDATED_COUNT" -eq 0 ] && [ "$MERGED_COUNT" -eq 0 ] && [ "$CONFLICT_COUNT
     SUMMARY="${SUMMARY}Already up to date."
 fi
 
-osascript -e "display alert \"JELLYSVN Update — $(basename "$FOLDER")\" message \"$SUMMARY\""
+osascript -e "display notification \"$SUMMARY\" with title \"✅ SVN Update Complete\" subtitle \"$(basename "$FOLDER") — Rev ${REVISION:-?}\""

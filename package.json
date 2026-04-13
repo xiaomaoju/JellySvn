@@ -1,6 +1,6 @@
 {
   "name": "jelly-svn",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "JellySvn - Premium SVN GUI Client for macOS",
   "main": "main.js",
   "scripts": {
@@ -66,6 +66,7 @@
       "preload.js",
       "index.html",
       "app.js",
+      "i18n.js",
       "style.css",
       "assets/**/*",
       "!assets/*.psd",
