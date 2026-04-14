@@ -690,10 +690,18 @@ function bindEvents() {
 
     // Bulk Actions
     document.getElementById('btn-bulk-update').addEventListener('click', () => {
+        if (state.selectedFiles.size === 0) {
+            alert('Please select files to update.');
+            return;
+        }
         runSvn(['update', ...Array.from(state.selectedFiles)]);
     });
 
     document.getElementById('btn-bulk-revert').addEventListener('click', () => {
+        if (state.selectedFiles.size === 0) {
+            alert('Please select files to revert.');
+            return;
+        }
         if (confirm(`Are you sure you want to revert ${state.selectedFiles.size} files?`)) {
             runSvn(['revert', '-R', ...Array.from(state.selectedFiles)]);
         }
