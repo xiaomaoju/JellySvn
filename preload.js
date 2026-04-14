@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
     // Projects
@@ -38,6 +38,15 @@ contextBridge.exposeInMainWorld('api', {
 
     // File copy (for drag & drop)
     copyFile: (srcPath, destPath) => ipcRenderer.invoke('copy-file', srcPath, destPath),
+    // Resolve absolute path from a dropped File (webUtils works under
+    // contextIsolation; File.path was removed in Electron 32+).
+    getDroppedFilePath: (file) => {
+        try {
+            return webUtils.getPathForFile(file);
+        } catch (e) {
+            return '';
+        }
+    },
 
     // External diff tool
     openExternalDiff: (options) => ipcRenderer.invoke('open-external-diff', options),

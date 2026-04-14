@@ -5551,8 +5551,14 @@ async function handleExternalFileDrop(files, project) {
     let addedCount = 0;
 
     for (const file of files) {
-        const filePath = file.path || file.name;
-        if (!filePath) continue;
+        // File.path was removed in Electron 32+; use webUtils via preload.
+        // Fall back to file.name only so an unresolved path doesn't hit
+        // fs.copyFileSync with a bare filename and succeed silently.
+        const filePath = (window.api.getDroppedFilePath && window.api.getDroppedFilePath(file)) || file.path || '';
+        if (!filePath) {
+            logToConsole(`Could not resolve dropped file path for '${file.name || 'unknown'}' — drag from Finder, not the browser.`, 'error');
+            continue;
+        }
 
         // Copy file to working copy directory
         try {
