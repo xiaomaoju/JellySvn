@@ -546,10 +546,16 @@ ipcMain.handle('run-svn', (event, command, cwd, repoUrl) => {
 
         if (repoUrl) {
             const cleanUrl = repoUrl.replace(/\/+$/, '');
-            for (const [key, val] of Object.entries(authData)) {
-                if (key === 'global') continue;
-                if (cleanUrl.includes(key.replace(/\/+$/, ''))) {
-                    creds = val;
+            // Sort by key length desc so a more specific (longer-path) match
+            // wins over a generic host-level key, and iteration order is
+            // deterministic regardless of insertion order.
+            const sortedKeys = Object.keys(authData)
+                .filter(k => k !== 'global')
+                .sort((a, b) => b.length - a.length);
+            for (const key of sortedKeys) {
+                const normKey = key.replace(/\/+$/, '');
+                if (cleanUrl === normKey || cleanUrl.startsWith(normKey + '/')) {
+                    creds = authData[key];
                     break;
                 }
             }

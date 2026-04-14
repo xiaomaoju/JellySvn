@@ -573,6 +573,25 @@ function selectProject(index) {
     const project = state.projects[index];
     if (project) {
         elements.currentRepo.textContent = project.path;
+        // Clear per-project stale view state so old data doesn't leak into
+        // the newly-selected project's views (blame/tree/props/branch/etc).
+        state.blameFile = '';
+        state.blameData = [];
+        state.treeData = {};
+        state.treeExpanded = new Set();
+        state.treeFolderStatus = {};
+        state.properties = [];
+        state.branchInfo = null;
+        state.branchList = [];
+        state.tagList = [];
+        state.externals = [];
+        state.searchResults = [];
+        state.logEntries = [];
+        state.logPage = 1;
+        state.lockFiles = [];
+        state.shelveList = [];
+        state.changelists = {};
+        state.mergePreview = [];
         renderTabs();
         refreshStatus();
         // Restart watcher if auto-refresh enabled
@@ -1249,22 +1268,29 @@ async function fetchLog() {
     const project = state.projects[state.selectedProjectIndex];
     if (!project) return;
 
-    // Default to last 7 days when no range is set
-    if (!state.logFilter.dateFrom && !state.logFilter.dateTo) {
+    // Default to last 7 days only when BOTH are empty, and persist that default
+    // so the UI inputs reflect the range actually used.
+    let dateFrom = state.logFilter.dateFrom;
+    let dateTo = state.logFilter.dateTo;
+    if (!dateFrom && !dateTo) {
         const def = getDefaultLogDateRange();
-        state.logFilter.dateFrom = def.dateFrom;
-        state.logFilter.dateTo = def.dateTo;
+        dateFrom = def.dateFrom;
+        dateTo = def.dateTo;
+        state.logFilter.dateFrom = dateFrom;
+        state.logFilter.dateTo = dateTo;
     }
 
     state.isScanning = true;
     render();
 
     let cmd;
-    if (state.logFilter.dateFrom || state.logFilter.dateTo) {
+    if (dateFrom || dateTo) {
         // Use server-side date range. Newest first via {to}:{from} order.
-        const from = state.logFilter.dateFrom || '1970-01-01';
-        const to = state.logFilter.dateTo || fmtLogDate(new Date());
-        cmd = ['log', '-r', `{${to}}:{${from}}`, '-v'];
+        // When only one side is set, bound the other with a sane default WITHOUT
+        // mutating state.logFilter (so the user's partial input is preserved).
+        const effFrom = dateFrom || '1970-01-01';
+        const effTo = dateTo || fmtLogDate(new Date());
+        cmd = ['log', '-r', `{${effTo}}:{${effFrom}}`, '-v'];
     } else {
         const limit = state.logPage * state.logLimit;
         cmd = ['log', '-l', String(limit), '-v'];
@@ -1329,14 +1355,16 @@ function applyLogDateInputChange() {
     }
 }
 
-// Wait for any in-progress operation or scanning to finish (max 15s)
+// Wait for any in-progress operation or scanning to finish.
+// Cap must exceed main-side SVN timeout (60s) with buffer so long updates
+// don't race with the next command.
 function waitForOperation() {
     if (!state.currentOperation && !state.isScanning) return Promise.resolve();
     return new Promise((resolve) => {
         let elapsed = 0;
         const interval = setInterval(() => {
             elapsed += 200;
-            if ((!state.currentOperation && !state.isScanning) || elapsed >= 15000) {
+            if ((!state.currentOperation && !state.isScanning) || elapsed >= 95000) {
                 clearInterval(interval);
                 resolve();
             }
@@ -1620,7 +1648,18 @@ function escapeHtml(str) {
 }
 
 function escapePath(str) {
-    return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    // escapePath is consumed inside single-quoted JS strings embedded in
+    // double-quoted HTML attributes (e.g. onclick="fn('${escapePath(p)}')").
+    // So it must neutralise both JS-string-breakers (\, ') AND HTML-attribute
+    // -breakers (", &, <, >). Do backslash first so later replacements don't
+    // get double-escaped.
+    return String(str)
+        .replace(/\\/g, '\\\\')
+        .replace(/'/g, "\\'")
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
 }
 
 // === Commit View ===
@@ -2962,7 +3001,13 @@ function parseLockStatus(output) {
         if (line.startsWith('Status against revision')) continue;
 
         const lockChar = line.length > 5 ? line[5] : ' ';
-        const filePath = line.substring(21).trim();
+        // `svn status -u` path column width is not fixed — the revision column
+        // varies with digit count. Skip the first 9 status flag columns, then
+        // peel off the optional out-of-date marker and numeric working-rev
+        // before taking the rest as the path.
+        const rest = line.substring(9);
+        const m = rest.match(/^\s*\*?\s*\d*\s*(.*)$/);
+        const filePath = (m ? m[1] : rest).trim();
 
         if (lockChar === 'K' || lockChar === 'O' || lockChar === 'T' || lockChar === 'B') {
             let lockStatus = 'unknown';
@@ -4200,6 +4245,10 @@ async function fetchChangelists() {
             }
         }
         state.changelists = changelists;
+        // Caller (renderToolsView) invokes us fire-and-forget after an
+        // innerHTML write, so we must re-render once data arrives or the
+        // new changelist rows never appear.
+        if (state.currentView === 'tools') render();
     }
 }
 
@@ -5508,9 +5557,13 @@ async function handleExternalFileDrop(files, project) {
 }
 
 function makeCardsDraggable() {
-    // Called after rendering status/commit/revert views
+    // Called after rendering status/commit/revert views.
+    // Guard against double-binding when MutationObserver fires on
+    // re-renders that reuse some DOM nodes.
     const cards = document.querySelectorAll('.status-card');
     cards.forEach(card => {
+        if (card.dataset.dragBound === '1') return;
+        card.dataset.dragBound = '1';
         card.setAttribute('draggable', 'true');
         card.addEventListener('dragstart', onCardDragStart);
         card.addEventListener('dragend', onCardDragEnd);
@@ -5556,12 +5609,16 @@ function makeTreeNodesDraggable() {
     const folderNodes = document.querySelectorAll('.tree-node:not(.tree-node-file)');
 
     fileNodes.forEach(node => {
+        if (node.dataset.dragBound === '1') return;
+        node.dataset.dragBound = '1';
         node.setAttribute('draggable', 'true');
         node.addEventListener('dragstart', onTreeDragStart);
         node.addEventListener('dragend', onTreeDragEnd);
     });
 
     folderNodes.forEach(node => {
+        if (node.dataset.dropBound === '1') return;
+        node.dataset.dropBound = '1';
         node.addEventListener('dragover', onTreeFolderDragOver);
         node.addEventListener('dragleave', onTreeFolderDragLeave);
         node.addEventListener('drop', onTreeFolderDrop);
