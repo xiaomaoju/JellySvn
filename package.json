@@ -17,7 +17,7 @@
     "copyright": "Copyright © 2026 JellySvn Team. All rights reserved.",
     "mac": {
       "category": "public.app-category.developer-tools",
-      "icon": "assets/icon.icns",
+      "icon": "Assets/icon.icns",
       "target": [
         {
           "target": "dmg",
@@ -68,9 +68,9 @@
       "app.js",
       "i18n.js",
       "style.css",
-      "assets/**/*",
-      "!assets/*.psd",
-      "!assets/*.sketch"
+      "Assets/**/*",
+      "!Assets/*.psd",
+      "!Assets/*.sketch"
     ],
     "directories": {
       "output": "dist",
