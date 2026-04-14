@@ -13,19 +13,31 @@ let PROJECTS_FILE;
 let SETTINGS_FILE;
 let mainWindow;
 let fileWatcher = null;
-let pendingOpenArgs = null;
+let pendingOpenArgsQueue = [];
+let rendererReady = false;
 
-// Parse command-line args: find folder path and --commit/--log flags
+// Parse command-line args: folder path, view flags, and quickaction reports
 function parseOpenArgs(argv) {
     const args = argv.slice(app.isPackaged ? 1 : 2);
     let folderPath = null;
     let view = null;
+    let qa = null;
+    let qaMsg = null;
 
-    for (const arg of args) {
+    for (let i = 0; i < args.length; i++) {
+        const arg = args[i];
         if (arg === '--commit') {
             view = 'commit-view';
         } else if (arg === '--log') {
             view = 'log';
+        } else if (arg === '--qa' && i + 1 < args.length) {
+            qa = args[++i];
+        } else if (arg === '--qa-msg' && i + 1 < args.length) {
+            qaMsg = args[++i];
+        } else if (arg === '--qa-msg-file' && i + 1 < args.length) {
+            try {
+                qaMsg = fs.readFileSync(args[++i], 'utf-8');
+            } catch (e) { /* ignore */ }
         } else if (!arg.startsWith('-')) {
             try {
                 const resolved = path.resolve(arg);
@@ -35,12 +47,23 @@ function parseOpenArgs(argv) {
             } catch (e) { /* ignore */ }
         }
     }
-    return (folderPath || view) ? { folderPath, view } : null;
+    return (folderPath || view || qa) ? { folderPath, view, qa, qaMsg } : null;
 }
 
-// Send open args to renderer when ready
+// Send open args to renderer when ready, otherwise queue them
 function sendOpenArgs(args) {
-    if (args && mainWindow && !mainWindow.isDestroyed()) {
+    if (!args) return;
+    if (rendererReady && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('open-with-args', args);
+    } else {
+        pendingOpenArgsQueue.push(args);
+    }
+}
+
+function flushPendingOpenArgs() {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    while (pendingOpenArgsQueue.length > 0) {
+        const args = pendingOpenArgsQueue.shift();
         mainWindow.webContents.send('open-with-args', args);
     }
 }
@@ -108,13 +131,17 @@ app.whenReady().then(() => {
     createWindow();
 
     // Parse initial command-line args (first launch)
-    pendingOpenArgs = parseOpenArgs(process.argv);
-    if (pendingOpenArgs) {
-        mainWindow.webContents.on('did-finish-load', () => {
-            sendOpenArgs(pendingOpenArgs);
-            pendingOpenArgs = null;
-        });
+    const initialArgs = parseOpenArgs(process.argv);
+    if (initialArgs) {
+        pendingOpenArgsQueue.push(initialArgs);
     }
+});
+
+// Renderer signals it's ready to receive open-with-args (after bindOpenWithArgs runs)
+ipcMain.handle('renderer-ready', () => {
+    rendererReady = true;
+    flushPendingOpenArgs();
+    return { success: true };
 });
 
 app.on('window-all-closed', () => {

@@ -293,30 +293,62 @@ async function stopWatcher() {
 
 // === Open With Args (Finder Quick Actions / command-line) ===
 let _initComplete = false;
-let _pendingOpenArgs = null;
+let _pendingOpenArgsQueue = [];
+let _processingOpenArgs = false;
 
 function bindOpenWithArgs() {
     if (!window.api.onOpenWithArgs) return;
     window.api.onOpenWithArgs((args) => {
+        _pendingOpenArgsQueue.push(args);
         if (_initComplete) {
-            handleOpenWithArgs(args);
-        } else {
-            // Queue until init() completes
-            _pendingOpenArgs = args;
+            drainPendingOpenArgs();
         }
     });
 }
 
+async function drainPendingOpenArgs() {
+    if (_processingOpenArgs) return;
+    _processingOpenArgs = true;
+    try {
+        while (_pendingOpenArgsQueue.length > 0) {
+            const args = _pendingOpenArgsQueue.shift();
+            await handleOpenWithArgs(args);
+        }
+    } finally {
+        _processingOpenArgs = false;
+    }
+}
+
 function onInitComplete() {
     _initComplete = true;
-    if (_pendingOpenArgs) {
-        handleOpenWithArgs(_pendingOpenArgs);
-        _pendingOpenArgs = null;
+    // Tell main process renderer is ready — main flushes its own queue
+    if (window.api.rendererReady) {
+        window.api.rendererReady().catch(() => {});
     }
+    drainPendingOpenArgs();
 }
 
 async function handleOpenWithArgs(args) {
     logToConsole(`Open request: ${JSON.stringify(args)}`, 'system');
+
+    // Quick action report from shell scripts (status/log/etc.)
+    if (args.qa) {
+        const label = ({
+            status: '📊 Quick Status',
+            log: '📜 Quick Log',
+            commit: '📤 Quick Commit',
+            update: '📥 Quick Update',
+            cleanup: '🧹 Quick Cleanup',
+        })[args.qa] || `⚡ Quick Action (${args.qa})`;
+        logToConsole(`${label} — result:`, 'success');
+        if (args.qaMsg) {
+            for (const line of args.qaMsg.split('\n')) {
+                if (line.trim()) logToConsole(line, 'system');
+            }
+        } else {
+            logToConsole('(no output)', 'system');
+        }
+    }
 
     if (args.folderPath) {
         // Wait for any in-progress operation
@@ -343,7 +375,7 @@ async function handleOpenWithArgs(args) {
             }
 
             await window.api.saveProject({ name: folderName, path: args.folderPath, url: repoUrl });
-            await loadProjects();
+            await loadProjects(args.folderPath);
             logToConsole(`Added project from Finder: ${folderName}`, 'success');
         }
 
@@ -512,15 +544,22 @@ async function openExistingProject() {
     }
 
     await window.api.saveProject({ name: folderName, path: cleanPath, url: repoUrl });
-    await loadProjects();
+    await loadProjects(cleanPath);
     logToConsole(`Added project: ${folderName}`, 'success');
 }
 
-async function loadProjects() {
+async function loadProjects(preferredPath) {
     try {
         state.projects = await window.api.loadProjects();
         if (state.projects.length > 0) {
-            selectProject(0);
+            let targetIdx = 0;
+            if (preferredPath) {
+                const found = state.projects.findIndex(p => p.path === preferredPath);
+                if (found >= 0) targetIdx = found;
+            } else if (state.selectedProjectIndex >= 0 && state.selectedProjectIndex < state.projects.length) {
+                targetIdx = state.selectedProjectIndex;
+            }
+            selectProject(targetIdx);
         } else {
             renderTabs();
         }
@@ -662,7 +701,7 @@ function bindEvents() {
         if (success) {
             const projectName = path.split('/').pop() || 'New Repo';
             await window.api.saveProject({ name: projectName, path, url });
-            await loadProjects();
+            await loadProjects(path);
         }
     });
 

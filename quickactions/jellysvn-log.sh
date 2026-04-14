@@ -86,4 +86,14 @@ TITLE="JELLYSVN Log - $(basename "$SVN_ROOT")"
 # Read temp file and display alert (do shell script preserves UTF-8)
 osascript -e "set msg to do shell script \"cat '$TMPFILE'\"" -e "display alert \"$TITLE\" message msg"
 
-rm -f "$TMPFILE"
+# Forward full log to running JellySvn app (if installed)
+APP_PATH=""
+for candidate in "/Applications/JellySvn.app" "$HOME/Applications/JellySvn.app"; do
+    [ -d "$candidate" ] && APP_PATH="$candidate" && break
+done
+if [ -n "$APP_PATH" ]; then
+    open -g -a "$APP_PATH" --args "$SVN_ROOT" --qa log --qa-msg-file "$TMPFILE"
+    ( sleep 5 && rm -f "$TMPFILE" ) &
+else
+    rm -f "$TMPFILE"
+fi

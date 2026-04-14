@@ -86,3 +86,22 @@ SUMMARY=""
 SUMMARY="${SUMMARY}\nTotal: $TOTAL files"
 
 osascript -e "display notification \"$SUMMARY\" with title \"📊 SVN Status\" subtitle \"$(basename "$FOLDER")\""
+
+# Forward full status output to running JellySvn app (if installed)
+APP_PATH=""
+for candidate in "/Applications/JellySvn.app" "$HOME/Applications/JellySvn.app"; do
+    [ -d "$candidate" ] && APP_PATH="$candidate" && break
+done
+if [ -n "$APP_PATH" ]; then
+    TMP_QA=$(mktemp /tmp/jellysvn-qa-status.XXXXXX)
+    {
+        echo "Working copy: $SVN_ROOT"
+        echo "Modified: $MODIFIED  Added: $ADDED  Deleted: $DELETED"
+        echo "Untracked: $UNTRACKED  Conflicts: $CONFLICTED  Missing: $MISSING"
+        echo "Total: $TOTAL files"
+        echo "---"
+        echo "$STATUS_OUTPUT"
+    } > "$TMP_QA"
+    open -g -a "$APP_PATH" --args "$SVN_ROOT" --qa status --qa-msg-file "$TMP_QA"
+    ( sleep 5 && rm -f "$TMP_QA" ) &
+fi

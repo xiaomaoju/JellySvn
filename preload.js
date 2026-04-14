@@ -47,4 +47,5 @@ contextBridge.exposeInMainWorld('api', {
         ipcRenderer.removeAllListeners('open-with-args');
         ipcRenderer.on('open-with-args', (_event, args) => callback(args));
     },
+    rendererReady: () => ipcRenderer.invoke('renderer-ready'),
 });
