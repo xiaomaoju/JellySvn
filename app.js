@@ -909,14 +909,14 @@ function showOperation(label) {
         }
     }, 1000);
 
-    // Safety timeout: auto-hide overlay after 90s to prevent permanent stuck state
+    // Safety timeout: auto-hide overlay to prevent permanent stuck state
     clearTimeout(_operationSafetyTimer);
     _operationSafetyTimer = setTimeout(() => {
         if (state.currentOperation) {
             logToConsole(`Operation "${state.currentOperation}" timed out. UI unlocked.`, 'warning');
             hideOperation();
         }
-    }, 90000);
+    }, 125000); // exceed main-side 60s SVN timeout + ~60s auth retry window
 }
 
 function hideOperation() {
@@ -1033,6 +1033,7 @@ async function refreshStatus() {
         return;
     }
 
+    let authRequired = false;
     try {
         const result = await window.api.runSvn(['status'], project.path, project.url);
         if (result.success) {
@@ -1051,20 +1052,25 @@ async function refreshStatus() {
             });
         } else {
             state.workingCopy = [];
-            // Auth retry: store intent, will retry after hideOperation in finally
-            if (result.error && result.error.includes('Authentication')) {
-                state._authRetryUrl = project.url;
+            // If auth failed, surface the login modal instead of retrying
+            // with the same (broken) credentials — which previously spawned
+            // a fire-and-forget runSvn that could recurse via runSvn's own
+            // refreshStatus-on-success path.
+            const errStr = (result.error || '') + (result.output || '');
+            if (errStr.match(/Authentication|Authorization|Username not found/)) {
+                authRequired = true;
             }
         }
     } finally {
         state.isScanning = false;
         hideOperation();
         render();
-        // Retry auth after operation is cleared
-        if (state._authRetryUrl) {
-            const retryUrl = state._authRetryUrl;
-            state._authRetryUrl = null;
-            runSvn(['status'], retryUrl);
+        if (authRequired) {
+            state.lastFailedCommand = { command: ['status'], url: project.url };
+            const urlInput = document.getElementById('auth-url');
+            if (urlInput) urlInput.value = project.url || 'global';
+            if (elements.authModal) elements.authModal.classList.remove('hidden');
+            logToConsole('Authentication required. Opening login window...', 'warning');
         }
     }
 }
