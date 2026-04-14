@@ -3397,9 +3397,15 @@ function onLanguageChange() {
 }
 
 function onSettingChange() {
-    const logLimit = parseInt(document.getElementById('settings-log-limit').value) || 20;
+    // Clamp to the HTML input bounds so devtools / paste / direct state
+    // writes can't push svn log -l into absurd values or poll the file
+    // watcher 10x/second.
+    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+    const rawLogLimit = parseInt(document.getElementById('settings-log-limit').value, 10);
+    const logLimit = clamp(isNaN(rawLogLimit) ? 20 : rawLogLimit, 5, 200);
     const theme = document.getElementById('settings-theme').value;
-    const interval = parseInt(document.getElementById('settings-auto-interval').value) || 5000;
+    const rawInterval = parseInt(document.getElementById('settings-auto-interval').value, 10);
+    const interval = clamp(isNaN(rawInterval) ? 5000 : rawInterval, 1000, 300000);
     const extDiff = document.getElementById('settings-ext-diff');
 
     state.settings.logLimit = logLimit;
