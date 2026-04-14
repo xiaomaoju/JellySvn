@@ -986,9 +986,16 @@ function t(key, params) {
                key;
 
     // Simple parameter substitution: t('msg.confirmMove', { source: 'a', target: 'b' })
+    // Use replaceAll so a template like "Delete {name}? Confirm {name}" substitutes
+    // every occurrence, and pass a function replacement so values containing $
+    // (e.g. "$100", "$1") aren't interpreted as backreferences.
     if (params) {
         for (const [k, v] of Object.entries(params)) {
-            text = text.replace(`{${k}}`, v);
+            const needle = `{${k}}`;
+            const value = String(v);
+            if (text.includes(needle)) {
+                text = text.split(needle).join(value);
+            }
         }
     }
 

@@ -1818,7 +1818,7 @@ function renderRevertView() {
                             <span class="checkmark"></span>
                         </label>
                         <span class="file-badge badge-${file.status}">${file.status.charAt(0).toUpperCase()}</span>
-                        <span class="file-path">${file.path}</span>
+                        <span class="file-path">${escapeHtml(file.path)}</span>
                     </div>
                     <div class="file-actions" onclick="event.stopPropagation()">
                         <button class="btn-secondary" onclick="showDiff('${ep}')">Diff</button>
@@ -1846,7 +1846,7 @@ function renderRevertView() {
                 <div class="status-card">
                     <div class="file-info">
                         <span class="file-badge badge-untracked">?</span>
-                        <span class="file-path">${file.path}</span>
+                        <span class="file-path">${escapeHtml(file.path)}</span>
                     </div>
                     <div class="file-actions">
                         <button class="btn-secondary" style="color: var(--error);" onclick="if(confirm('Delete ${ep}?')) deleteFile('${ep}')">Delete</button>
