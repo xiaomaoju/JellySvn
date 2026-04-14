@@ -5425,7 +5425,7 @@ async function removeExternal(index) {
     }
 }
 
-function editExternal(index) {
+async function editExternal(index) {
     const ext = state.externals[index];
     const newUrl = prompt('Repository URL:', ext.url);
     if (newUrl === null) return;
@@ -5433,6 +5433,10 @@ function editExternal(index) {
     if (newDir === null) return;
     const newRev = prompt('Revision (leave empty for HEAD):', ext.revision || '');
     if (newRev === null) return;
+    if (!newUrl.trim() || !newDir.trim()) {
+        alert('Repository URL and Local Directory are required.');
+        return;
+    }
 
     const updated = { ...ext, url: newUrl.trim(), localDir: newDir.trim(), revision: newRev.trim() };
     updated.raw = buildExternalLine(updated);
@@ -5443,13 +5447,12 @@ function editExternal(index) {
     const value = allExternals.map(e => e.raw || buildExternalLine(e)).join('\n');
     const target = state.externalsTarget || '.';
 
-    runSvn(['propset', 'svn:externals', value, target]).then(success => {
-        if (success) {
-            state.externals = allExternals;
-            logToConsole(`Updated external: ${updated.localDir}`, 'success');
-            render();
-        }
-    });
+    const success = await runSvn(['propset', 'svn:externals', value, target]);
+    if (success) {
+        state.externals = allExternals;
+        logToConsole(`Updated external: ${updated.localDir}`, 'success');
+        render();
+    }
 }
 
 async function saveExternalsRaw() {
