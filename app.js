@@ -275,11 +275,19 @@ async function startWatcher() {
     if (!project) return;
     try {
         const result = await window.api.watchDirectory(project.path);
-        if (result.success) {
-            state.watcherActive = true;
+        // Always reflect the authoritative result. Previously a failure
+        // left state.watcherActive at its prior (possibly true) value —
+        // so after switching to a project where fs.watch() errored, the
+        // renderer kept forwarding file-changed events for the old
+        // project as if the watcher were still live.
+        state.watcherActive = !!(result && result.success);
+        if (state.watcherActive) {
             logToConsole('File watcher started.', 'success');
+        } else {
+            logToConsole(`Watcher failed: ${(result && result.error) || 'unknown error'}`, 'warning');
         }
     } catch (err) {
+        state.watcherActive = false;
         logToConsole(`Watcher error: ${err.message}`, 'error');
     }
 }
@@ -722,8 +730,8 @@ function bindEvents() {
 
     // Checkout Modal
     document.getElementById('btn-confirm-checkout').addEventListener('click', async () => {
-        const url = document.getElementById('checkout-url').value;
-        const path = document.getElementById('checkout-path').value.replace(/\/+$/, '');
+        const url = document.getElementById('checkout-url').value.trim();
+        const path = document.getElementById('checkout-path').value.trim().replace(/\/+$/, '');
         if (!url || !path) return alert('Please enter both URL and Path');
 
         closeModal();
@@ -745,9 +753,11 @@ function bindEvents() {
 
     // Auth Modal
     document.getElementById('btn-save-auth').addEventListener('click', async () => {
-        const url = document.getElementById('auth-url').value;
-        const user = document.getElementById('auth-username').value;
+        const url = document.getElementById('auth-url').value.trim();
+        const user = document.getElementById('auth-username').value.trim();
         const pass = document.getElementById('auth-password').value;
+        if (!url) return alert('Please enter a URL (or "global").');
+        if (!user) return alert('Please enter a username.');
 
         const result = await window.api.saveAuth({ url, username: user, password: pass });
 
