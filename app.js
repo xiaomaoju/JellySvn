@@ -2506,7 +2506,7 @@ function renderTree() {
     let html = '<div class="tree-container">';
 
     const rootName = rootPath.split('/').pop() || rootPath;
-    html += `<div class="tree-node tree-node-root" onclick="toggleTreeFolder('${escapeHtml(rootPath)}')">
+    html += `<div class="tree-node tree-node-root" data-path="${escapeHtml(rootPath)}" onclick="toggleTreeFolder('${escapeHtml(rootPath)}')">
         <span class="tree-toggle ${state.treeExpanded.has(rootPath) ? 'expanded' : ''}">&#9654;</span>
         <span class="tree-icon">📦</span>
         <span class="tree-name">${escapeHtml(rootName)}</span>
@@ -2540,7 +2540,7 @@ function renderTreeChildren(parentPath, depth) {
 
         if (item.type === 'directory') {
             const isExpanded = state.treeExpanded.has(item.path);
-            html += `<div class="tree-node" style="padding-left: ${indent}px" onclick="toggleTreeFolder('${safePath}')">
+            html += `<div class="tree-node" data-path="${safePath}" style="padding-left: ${indent}px" onclick="toggleTreeFolder('${safePath}')">
                 <span class="tree-toggle ${isExpanded ? 'expanded' : ''}">&#9654;</span>
                 <span class="tree-icon">${isExpanded ? '📂' : '📁'}</span>
                 <span class="tree-name">${escapeHtml(item.name)}</span>
@@ -2558,7 +2558,7 @@ function renderTreeChildren(parentPath, depth) {
                 html += renderTreeChildren(item.path, depth + 1);
             }
         } else {
-            html += `<div class="tree-node tree-node-file" style="padding-left: ${indent}px">
+            html += `<div class="tree-node tree-node-file" data-path="${safePath}" style="padding-left: ${indent}px">
                 <span class="tree-toggle"></span>
                 <span class="tree-icon">📄</span>
                 <span class="tree-name file">${escapeHtml(item.name)}</span>
@@ -5647,9 +5647,11 @@ function makeTreeNodesDraggable() {
 
 function onTreeDragStart(e) {
     e.stopPropagation();
-    const nameEl = e.currentTarget.querySelector('.tree-name');
-    if (nameEl) {
-        e.dataTransfer.setData('text/x-tree-path', nameEl.textContent);
+    // Read the absolute path from data-path rather than the displayed
+    // leaf name — displayed text is just item.name and loses parent dirs.
+    const path = e.currentTarget.dataset.path;
+    if (path) {
+        e.dataTransfer.setData('text/x-tree-path', path);
         e.dataTransfer.effectAllowed = 'move';
         e.currentTarget.classList.add('dragging');
     }
@@ -5679,17 +5681,28 @@ async function onTreeFolderDrop(e) {
     const sourcePath = e.dataTransfer.getData('text/x-tree-path');
     if (!sourcePath) return;
 
-    const targetNameEl = e.currentTarget.querySelector('.tree-name');
-    if (!targetNameEl) return;
-    const targetPath = targetNameEl.textContent;
-
+    // Prefer the data-path attribute; fall back to tree-name text for the
+    // root node if data-path is somehow absent.
+    const targetPath = e.currentTarget.dataset.path;
+    if (!targetPath) return;
     if (sourcePath === targetPath) return;
 
-    if (!confirm(t('dnd.moveConfirm', { source: sourcePath, target: targetPath }))) return;
+    // Guard: a folder cannot be moved into itself or its own descendant.
+    if (targetPath === sourcePath || targetPath.startsWith(sourcePath + '/')) {
+        logToConsole('Cannot move a folder into itself or a descendant.', 'warning');
+        return;
+    }
 
-    const success = await runSvn(['move', sourcePath, targetPath + '/' + sourcePath]);
+    // Build destination using the source's leaf name so "foo/bar.js" dropped
+    // onto "lib/utils" becomes "lib/utils/bar.js".
+    const leafName = sourcePath.split('/').pop();
+    const destPath = targetPath + '/' + leafName;
+
+    if (!confirm(t('dnd.moveConfirm', { source: sourcePath, target: destPath }))) return;
+
+    const success = await runSvn(['move', sourcePath, destPath]);
     if (success) {
-        logToConsole(`Moved '${sourcePath}' to '${targetPath}/'`, 'success');
+        logToConsole(`Moved '${sourcePath}' to '${destPath}'`, 'success');
         fetchTree();
     }
 }
