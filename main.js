@@ -356,10 +356,14 @@ ipcMain.handle('watch-directory', (event, dirPath) => {
     }
     try {
         fileWatcher = fs.watch(dirPath, { recursive: true }, (eventType, filename) => {
-            if (filename && !filename.includes('.svn')) {
-                if (mainWindow && !mainWindow.isDestroyed()) {
-                    mainWindow.webContents.send('file-changed', { eventType, filename });
-                }
+            if (!filename) return;
+            // Filter by path segment, not substring — previously a user file
+            // named "README.svn.md" was silently dropped because it contained
+            // the literal ".svn". Only ignore actual .svn metadata paths.
+            const segments = filename.split(/[\\/]/);
+            if (segments.includes('.svn')) return;
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('file-changed', { eventType, filename });
             }
         });
         fileWatcher.on('error', (err) => {

@@ -3405,7 +3405,7 @@ function onSettingChange() {
     const logLimit = clamp(isNaN(rawLogLimit) ? 20 : rawLogLimit, 5, 200);
     const theme = document.getElementById('settings-theme').value;
     const rawInterval = parseInt(document.getElementById('settings-auto-interval').value, 10);
-    const interval = clamp(isNaN(rawInterval) ? 5000 : rawInterval, 1000, 300000);
+    const interval = clamp(isNaN(rawInterval) ? 5000 : rawInterval, 1000, 30000);
     const extDiff = document.getElementById('settings-ext-diff');
 
     state.settings.logLimit = logLimit;
