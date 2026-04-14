@@ -1014,6 +1014,11 @@ function setLanguage(lang) {
     state.settings.language = lang;
     saveSettings();
 
+    // Keep <html lang="..."> in sync for screen readers / locale-aware APIs
+    if (typeof document !== 'undefined' && document.documentElement) {
+        document.documentElement.lang = lang;
+    }
+
     // Re-render sidebar and current view
     renderSidebar();
     switchView(state.currentView);
@@ -1032,5 +1037,8 @@ function getCurrentLanguage() {
 function initLanguage(lang) {
     if (lang && translations[lang]) {
         _currentLanguage = lang;
+    }
+    if (typeof document !== 'undefined' && document.documentElement) {
+        document.documentElement.lang = _currentLanguage;
     }
 }
