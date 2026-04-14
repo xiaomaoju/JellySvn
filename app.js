@@ -1235,15 +1235,41 @@ async function addAllUntracked() {
 }
 
 // === Log View ===
+function fmtLogDate(d) {
+    return d.toISOString().slice(0, 10);
+}
+
+function getDefaultLogDateRange() {
+    const today = new Date();
+    const past = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+    return { dateFrom: fmtLogDate(past), dateTo: fmtLogDate(today) };
+}
+
 async function fetchLog() {
     const project = state.projects[state.selectedProjectIndex];
     if (!project) return;
 
+    // Default to last 7 days when no range is set
+    if (!state.logFilter.dateFrom && !state.logFilter.dateTo) {
+        const def = getDefaultLogDateRange();
+        state.logFilter.dateFrom = def.dateFrom;
+        state.logFilter.dateTo = def.dateTo;
+    }
+
     state.isScanning = true;
     render();
 
-    const limit = state.logPage * state.logLimit;
-    const success = await runSvnSilent(['log', '-l', String(limit), '-v']);
+    let cmd;
+    if (state.logFilter.dateFrom || state.logFilter.dateTo) {
+        // Use server-side date range. Newest first via {to}:{from} order.
+        const from = state.logFilter.dateFrom || '1970-01-01';
+        const to = state.logFilter.dateTo || fmtLogDate(new Date());
+        cmd = ['log', '-r', `{${to}}:{${from}}`, '-v'];
+    } else {
+        const limit = state.logPage * state.logLimit;
+        cmd = ['log', '-l', String(limit), '-v'];
+    }
+    const success = await runSvnSilent(cmd);
     state.isScanning = false;
 
     if (success) {
@@ -1253,6 +1279,54 @@ async function fetchLog() {
         logToConsole('Failed to fetch log entries.', 'error');
     }
     render();
+}
+
+function applyLogDatePreset(days) {
+    const today = new Date();
+    const past = new Date(today.getTime() - days * 24 * 60 * 60 * 1000);
+    state.logFilter.dateFrom = fmtLogDate(past);
+    state.logFilter.dateTo = fmtLogDate(today);
+    state.logPage = 1;
+    fetchLog();
+}
+
+function applyLogDatePresetAll() {
+    state.logFilter.dateFrom = '';
+    state.logFilter.dateTo = '';
+    state.logPage = 1;
+    // Skip default-injection by going through fetchLog with explicit empty,
+    // but fetchLog re-applies default. Use direct command to truly fetch all.
+    fetchAllLog();
+}
+
+async function fetchAllLog() {
+    const project = state.projects[state.selectedProjectIndex];
+    if (!project) return;
+    state.isScanning = true;
+    render();
+    const limit = state.logPage * state.logLimit;
+    const success = await runSvnSilent(['log', '-l', String(limit), '-v']);
+    state.isScanning = false;
+    if (success) {
+        parseLogEntries(success.output || '');
+    } else {
+        state.logEntries = [];
+        logToConsole('Failed to fetch log entries.', 'error');
+    }
+    render();
+}
+
+function applyLogDateInputChange() {
+    const dateFrom = document.getElementById('log-filter-date-from');
+    const dateTo = document.getElementById('log-filter-date-to');
+    state.logFilter.dateFrom = dateFrom ? dateFrom.value : '';
+    state.logFilter.dateTo = dateTo ? dateTo.value : '';
+    state.logPage = 1;
+    if (state.logFilter.dateFrom || state.logFilter.dateTo) {
+        fetchLog();
+    } else {
+        fetchAllLog();
+    }
 }
 
 // Wait for any in-progress operation or scanning to finish (max 15s)
@@ -1379,8 +1453,10 @@ function applyLogFilter() {
 }
 
 function clearLogFilter() {
-    state.logFilter = { keyword: '', author: '', dateFrom: '', dateTo: '' };
-    render();
+    const def = getDefaultLogDateRange();
+    state.logFilter = { keyword: '', author: '', dateFrom: def.dateFrom, dateTo: def.dateTo };
+    state.logPage = 1;
+    fetchLog();
 }
 
 function parseSvnDate(dateStr) {
@@ -1445,11 +1521,18 @@ function renderLog() {
                 <input type="text" id="log-filter-author" class="log-filter-input log-filter-author" placeholder="${t('log.author')}" value="${escapeHtml(state.logFilter.author)}" oninput="debounceLogFilter()">
             </div>
             <div class="log-filter-group log-filter-date-group">
-                <input type="date" id="log-filter-date-from" class="log-filter-input log-filter-date" value="${state.logFilter.dateFrom}" onchange="applyLogFilter()">
+                <span class="log-filter-label">${t('log.dateRange')}</span>
+                <input type="date" id="log-filter-date-from" class="log-filter-input log-filter-date" value="${state.logFilter.dateFrom}" onchange="applyLogDateInputChange()">
                 <span class="log-filter-separator">~</span>
-                <input type="date" id="log-filter-date-to" class="log-filter-input log-filter-date" value="${state.logFilter.dateTo}" onchange="applyLogFilter()">
+                <input type="date" id="log-filter-date-to" class="log-filter-input log-filter-date" value="${state.logFilter.dateTo}" onchange="applyLogDateInputChange()">
             </div>
             <button class="btn-secondary btn-small" onclick="clearLogFilter()" ${hasFilter ? '' : 'disabled'}>${t('log.clear')}</button>
+        </div>
+        <div class="log-filter-row log-filter-presets">
+            <button class="btn-secondary btn-small" onclick="applyLogDatePreset(7)">${t('log.last7days')}</button>
+            <button class="btn-secondary btn-small" onclick="applyLogDatePreset(30)">${t('log.last30days')}</button>
+            <button class="btn-secondary btn-small" onclick="applyLogDatePreset(90)">${t('log.last90days')}</button>
+            <button class="btn-secondary btn-small" onclick="applyLogDatePresetAll()">${t('log.allDates')}</button>
         </div>
         ${hasFilter ? `<div class="log-filter-results">${t('log.showingEntries', { filtered: filtered.length, total: state.logEntries.length })}</div>` : ''}
     </div>`;

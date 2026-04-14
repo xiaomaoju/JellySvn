@@ -282,6 +282,11 @@ const translations = {
         'log.undoThisChange': 'Undo this change',
         'log.changedFiles': 'Changed Files ({count}):',
         'log.loadMore': 'Load More',
+        'log.dateRange': 'Range:',
+        'log.last7days': 'Last 7 days',
+        'log.last30days': 'Last 30 days',
+        'log.last90days': 'Last 90 days',
+        'log.allDates': 'All',
 
         // Revert View
         'revert.modifiedFiles': 'Modified Files (can be reverted)',
@@ -761,6 +766,11 @@ const translations = {
         'log.undoThisChange': '이 변경 취소',
         'log.changedFiles': '변경된 파일 ({count}개):',
         'log.loadMore': '더 보기',
+        'log.dateRange': '기간:',
+        'log.last7days': '최근 1주',
+        'log.last30days': '최근 1개월',
+        'log.last90days': '최근 3개월',
+        'log.allDates': '전체',
 
         // Revert View
         'revert.modifiedFiles': '수정된 파일 (되돌리기 가능)',

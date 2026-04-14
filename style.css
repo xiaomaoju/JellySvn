@@ -893,6 +893,22 @@ textarea#commit-message {
     color-scheme: dark;
 }
 
+.log-filter-label {
+    color: var(--text-dim);
+    font-size: 12px;
+    margin-right: 2px;
+}
+
+.log-filter-presets {
+    margin-top: 8px;
+    gap: 6px;
+}
+
+.log-filter-presets .btn-small {
+    padding: 5px 12px;
+    font-size: 12px;
+}
+
 .log-filter-separator {
     color: var(--text-dim);
     font-size: 14px;

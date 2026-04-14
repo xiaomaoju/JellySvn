@@ -73,3 +73,21 @@ if [ "$UPDATED_COUNT" -eq 0 ] && [ "$MERGED_COUNT" -eq 0 ] && [ "$CONFLICT_COUNT
 fi
 
 osascript -e "display notification \"$SUMMARY\" with title \"✅ SVN Update Complete\" subtitle \"$(basename "$FOLDER") — Rev ${REVISION:-?}\""
+
+# Forward update report to running JellySvn app (if installed)
+APP_PATH=""
+for candidate in "/Applications/JellySvn.app" "$HOME/Applications/JellySvn.app"; do
+    [ -d "$candidate" ] && APP_PATH="$candidate" && break
+done
+if [ -n "$APP_PATH" ]; then
+    TMP_QA=$(mktemp /tmp/jellysvn-qa-update.XXXXXX)
+    {
+        echo "Working copy: $SVN_ROOT"
+        echo "Revision: ${REVISION:-unknown}"
+        echo "Updated: $UPDATED_COUNT  Merged: $MERGED_COUNT  Conflicts: $CONFLICT_COUNT"
+        echo "---"
+        echo "$UPDATE_OUTPUT"
+    } > "$TMP_QA"
+    open -g -a "$APP_PATH" --args "$SVN_ROOT" --qa update --qa-msg-file "$TMP_QA"
+    ( sleep 5 && rm -f "$TMP_QA" ) &
+fi

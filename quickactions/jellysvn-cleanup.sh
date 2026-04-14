@@ -64,6 +64,25 @@ VACUUM_CODE=$?
 
 if [ $VACUUM_CODE -eq 0 ]; then
     osascript -e "display notification \"Cleanup and vacuum completed successfully.\" with title \"✅ SVN Cleanup Done\" subtitle \"$(basename "$SVN_ROOT")\""
+    SUMMARY="Cleanup and vacuum completed successfully."
 else
     osascript -e "display notification \"Cleanup completed successfully.\" with title \"✅ SVN Cleanup Done\" subtitle \"$(basename "$SVN_ROOT")\""
+    SUMMARY="Cleanup completed successfully (vacuum unavailable)."
+fi
+
+# Forward cleanup report to running JellySvn app (if installed)
+APP_PATH=""
+for candidate in "/Applications/JellySvn.app" "$HOME/Applications/JellySvn.app"; do
+    [ -d "$candidate" ] && APP_PATH="$candidate" && break
+done
+if [ -n "$APP_PATH" ]; then
+    TMP_QA=$(mktemp /tmp/jellysvn-qa-cleanup.XXXXXX)
+    {
+        echo "Working copy: $SVN_ROOT"
+        echo "$SUMMARY"
+        [ -n "$CLEANUP_OUTPUT" ] && { echo "---"; echo "$CLEANUP_OUTPUT"; }
+        [ -n "$VACUUM_OUTPUT" ] && [ "$VACUUM_CODE" -eq 0 ] && { echo "---"; echo "$VACUUM_OUTPUT"; }
+    } > "$TMP_QA"
+    open -g -a "$APP_PATH" --args "$SVN_ROOT" --qa cleanup --qa-msg-file "$TMP_QA"
+    ( sleep 5 && rm -f "$TMP_QA" ) &
 fi
