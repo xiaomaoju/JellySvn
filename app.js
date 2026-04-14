@@ -2813,44 +2813,51 @@ function parseSvnInfo(output) {
     return info;
 }
 
-async function fetchBranchList() {
-    const branchesUrl = state.repoRootUrl + '/branches';
+// Derive the project-layout base URL (parent of trunk/branches/tags).
+// For a sub-project layout like `repo/myproj/trunk`, returns `repo/myproj`;
+// for single-project repos it falls back to repoRootUrl.
+function getLayoutBase() {
+    const wcUrl = state.branchInfo && state.branchInfo.url;
+    if (wcUrl) {
+        const m = wcUrl.match(/^(.*?)\/(trunk|branches\/[^/]+|tags\/[^/]+)(\/.*)?$/);
+        if (m) return m[1];
+    }
+    return state.repoRootUrl || '';
+}
+
+async function lsSvnPath(url) {
+    const project = state.projects[state.selectedProjectIndex];
+    if (!project) return null;
     try {
-        const result = await window.api.runSvn(
-            ['ls', branchesUrl],
-            null,
-            state.projects[state.selectedProjectIndex].url
-        );
-        if (result.success) {
-            state.branchList = result.output.split('\n')
+        const result = await window.api.runSvn(['ls', url], null, project.url);
+        if (result && result.success) {
+            return result.output.split('\n')
                 .filter(l => l.trim())
                 .map(l => l.replace(/\/$/, ''));
-        } else {
-            state.branchList = [];
         }
-    } catch {
-        state.branchList = [];
+    } catch { /* fall through */ }
+    return null;
+}
+
+async function fetchBranchList() {
+    const base = getLayoutBase();
+    if (!base) { state.branchList = []; return; }
+    // Try sub-project layout first, fall back to root layout.
+    let list = await lsSvnPath(base + '/branches');
+    if (list === null && base !== state.repoRootUrl) {
+        list = await lsSvnPath(state.repoRootUrl + '/branches');
     }
+    state.branchList = list || [];
 }
 
 async function fetchTagList() {
-    const tagsUrl = state.repoRootUrl + '/tags';
-    try {
-        const result = await window.api.runSvn(
-            ['ls', tagsUrl],
-            null,
-            state.projects[state.selectedProjectIndex].url
-        );
-        if (result.success) {
-            state.tagList = result.output.split('\n')
-                .filter(l => l.trim())
-                .map(l => l.replace(/\/$/, ''));
-        } else {
-            state.tagList = [];
-        }
-    } catch {
-        state.tagList = [];
+    const base = getLayoutBase();
+    if (!base) { state.tagList = []; return; }
+    let list = await lsSvnPath(base + '/tags');
+    if (list === null && base !== state.repoRootUrl) {
+        list = await lsSvnPath(state.repoRootUrl + '/tags');
     }
+    state.tagList = list || [];
 }
 
 function renderBranch() {
@@ -2890,6 +2897,8 @@ function renderBranch() {
         </div>
     </div>`;
 
+    const layoutBase = getLayoutBase();
+
     // Branches list
     html += `<div class="section-label">${t('branch.branches', { count: state.branchList.length })}</div>`;
     if (state.branchList.length === 0) {
@@ -2897,7 +2906,7 @@ function renderBranch() {
     } else {
         html += '<div class="status-list">';
         for (const branch of state.branchList) {
-            const branchUrl = state.repoRootUrl + '/branches/' + branch;
+            const branchUrl = layoutBase + '/branches/' + branch;
             html += `
                 <div class="status-card branch-card">
                     <div class="file-info">
@@ -2919,7 +2928,7 @@ function renderBranch() {
     } else {
         html += '<div class="status-list">';
         for (const tag of state.tagList) {
-            const tagUrl = state.repoRootUrl + '/tags/' + tag;
+            const tagUrl = layoutBase + '/tags/' + tag;
             html += `
                 <div class="status-card branch-card">
                     <div class="file-info">
@@ -2948,7 +2957,7 @@ async function createBranchOrTag() {
     if (!state.branchInfo || !state.branchInfo.url) return alert('Cannot determine current URL. Please refresh.');
 
     const destPath = type === 'branch' ? 'branches' : 'tags';
-    const destUrl = state.repoRootUrl + '/' + destPath + '/' + name;
+    const destUrl = getLayoutBase() + '/' + destPath + '/' + name;
     const sourceUrl = state.branchInfo.url;
 
     const success = await runSvn(['copy', sourceUrl, destUrl, '-m', message]);
@@ -3585,11 +3594,12 @@ function renderMergeView() {
         </div>`;
 
     // Branch suggestions
-    if (state.branchList.length > 0 && state.repoRootUrl) {
+    const mergeLayoutBase = getLayoutBase();
+    if (state.branchList.length > 0 && mergeLayoutBase) {
         html += `<div class="merge-suggestions">
             <span class="merge-suggestions-label">${t('merge.branches')}</span>`;
         for (const branch of state.branchList) {
-            const branchUrl = state.repoRootUrl + '/branches/' + branch;
+            const branchUrl = mergeLayoutBase + '/branches/' + branch;
             html += `<button class="btn-secondary btn-small merge-suggestion-btn" onclick="document.getElementById('merge-source-url').value='${escapeHtml(branchUrl)}'">${escapeHtml(branch)}</button>`;
         }
         html += '</div>';
