@@ -1508,6 +1508,7 @@ function applyLogFilter() {
 }
 
 function clearLogFilter() {
+    clearTimeout(_logFilterTimer);
     const def = getDefaultLogDateRange();
     state.logFilter = { keyword: '', author: '', dateFrom: def.dateFrom, dateTo: def.dateTo };
     state.logPage = 1;
@@ -4808,6 +4809,7 @@ function onCommitFilterChange() {
 }
 
 function clearCommitFilter() {
+    clearTimeout(_commitFilterTimer);
     state.commitFilter = '';
     render();
 }
