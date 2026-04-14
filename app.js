@@ -1919,10 +1919,9 @@ async function openExternalDiff(filePath, tool) {
 
     // Write base content to temp file
     const baseTmpPath = cwd + '/.svn-shelves/.diff-base-' + filePath.replace(/\//g, '_');
-    try {
-        await window.api.writeFile(baseTmpPath, baseResult.output || '');
-    } catch (e) {
-        logToConsole(`Failed to create temp file: ${e.message}`, 'error');
+    const baseWrite = await window.api.writeFile(baseTmpPath, baseResult.output || '');
+    if (!baseWrite || !baseWrite.success) {
+        logToConsole(`Failed to create temp file: ${baseWrite && baseWrite.error ? baseWrite.error : 'write failed'}`, 'error');
         return;
     }
 
@@ -5046,22 +5045,24 @@ async function doShelve() {
     const shelvesDir = project.path + '/.svn-shelves';
     const patchPath = shelvesDir + '/' + name + '.patch';
 
-    // Ensure directory exists and write patch
-    try {
-        await window.api.writeFile(patchPath, diffResult.output);
-        logToConsole(`Patch saved to: ${patchPath}`, 'success');
-
-        // Revert working copy
-        if (confirm('Shelf created. Revert all working copy changes now?')) {
-            await runSvn(['revert', '-R', '.']);
-            logToConsole(`Shelved changes as "${name}" (patch-based). Working copy reverted.`, 'success');
-        }
-
-        if (nameInput) nameInput.value = '';
-        await fetchShelveList();
-    } catch (err) {
-        logToConsole(`Failed to create shelf: ${err.message}`, 'error');
+    // IPC write-file returns {success, error} instead of throwing, so we
+    // must inspect the result; the outer try/catch would silently swallow
+    // a false success.
+    const writeRes = await window.api.writeFile(patchPath, diffResult.output);
+    if (!writeRes || !writeRes.success) {
+        logToConsole(`Failed to create shelf: ${writeRes && writeRes.error ? writeRes.error : 'write failed'}`, 'error');
+        return;
     }
+    logToConsole(`Patch saved to: ${patchPath}`, 'success');
+
+    // Revert working copy
+    if (confirm('Shelf created. Revert all working copy changes now?')) {
+        await runSvn(['revert', '-R', '.']);
+        logToConsole(`Shelved changes as "${name}" (patch-based). Working copy reverted.`, 'success');
+    }
+
+    if (nameInput) nameInput.value = '';
+    await fetchShelveList();
 }
 
 async function doUnshelve(name) {

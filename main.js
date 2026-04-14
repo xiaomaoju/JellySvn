@@ -481,6 +481,12 @@ ipcMain.handle('save-file-dialog', async (event, defaultName) => {
 
 ipcMain.handle('write-file', (event, filePath, content) => {
     try {
+        // Auto-create parent directory (e.g. .svn-shelves/) so first-time
+        // writes to a fresh subdir succeed instead of failing with ENOENT.
+        const dir = path.dirname(filePath);
+        if (dir && !fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
         fs.writeFileSync(filePath, content, 'utf-8');
         return { success: true };
     } catch (e) {
@@ -491,6 +497,10 @@ ipcMain.handle('write-file', (event, filePath, content) => {
 // Copy file (for drag & drop)
 ipcMain.handle('copy-file', (event, srcPath, destPath) => {
     try {
+        const dir = path.dirname(destPath);
+        if (dir && !fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
         fs.copyFileSync(srcPath, destPath);
         return { success: true };
     } catch (e) {
