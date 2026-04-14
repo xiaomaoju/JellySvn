@@ -629,7 +629,14 @@ async function deleteProject(index, event) {
     if (state.projects.length > 0) {
         selectProject(Math.max(0, state.selectedProjectIndex));
     } else {
+        // No projects left — stop the file watcher so main.js doesn't
+        // keep emitting change events for a directory the user just
+        // removed from the project list.
+        if (state.watcherActive) {
+            stopWatcher();
+        }
         state.selectedProjectIndex = -1;
+        state.workingCopy = [];
         elements.currentRepo.textContent = 'Not Connected';
         renderTabs();
         render();
@@ -640,7 +647,7 @@ function renderTabs() {
     const addButton = '<button class="add-tab" id="add-project-btn">+</button>';
     elements.projectTabs.innerHTML = state.projects.map((p, i) => `
         <div class="tab ${i === state.selectedProjectIndex ? 'active' : ''}" onclick="selectProject(${i})">
-            <span>📦 ${p.name || 'Untitled'}</span>
+            <span>📦 ${escapeHtml(p.name || 'Untitled')}</span>
             <button class="close-tab" onclick="deleteProject(${i}, event)">×</button>
         </div>
     `).join('') + addButton;
