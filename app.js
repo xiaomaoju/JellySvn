@@ -259,6 +259,9 @@ function bindFileWatcher() {
         if (state.currentOperation) return;
         clearTimeout(_fileChangeTimer);
         _fileChangeTimer = setTimeout(() => {
+            // Re-check after debounce — an operation may have started in the
+            // intervening window; firing refreshStatus now would log "Busy".
+            if (state.currentOperation || state.isScanning) return;
             if (state.currentView === 'status' || state.currentView === 'commit-view' || state.currentView === 'revert-view') {
                 logToConsole(`File changed: ${payload.filename} — auto-refreshing...`, 'system');
                 refreshStatus();
@@ -2020,15 +2023,15 @@ function parseDiffOutput(raw) {
             continue;
         }
 
-        if (line.startsWith('-') && !line.startsWith('---')) {
+        if (line.startsWith('-') && !line.startsWith('--- ')) {
             let removeCount = 0;
             let addCount = 0;
             let j = i;
-            while (j < lines.length && lines[j].startsWith('-') && !lines[j].startsWith('---')) {
+            while (j < lines.length && lines[j].startsWith('-') && !lines[j].startsWith('--- ')) {
                 removeCount++;
                 j++;
             }
-            while (j < lines.length && lines[j].startsWith('+') && !lines[j].startsWith('+++')) {
+            while (j < lines.length && lines[j].startsWith('+') && !lines[j].startsWith('+++ ')) {
                 addCount++;
                 j++;
             }
@@ -2083,7 +2086,7 @@ function parseDiffOutput(raw) {
             continue;
         }
 
-        if (line.startsWith('+') && !line.startsWith('+++')) {
+        if (line.startsWith('+') && !line.startsWith('+++ ')) {
             html += `<div class="diff-line added">
                 <span class="diff-line-num">${newLineNum}</span>
                 <span class="diff-line-content">${escapeHtml(line)}</span>
@@ -2153,12 +2156,12 @@ function parseDiffSideBySide(raw) {
             continue;
         }
 
-        if (line.startsWith('-') && !line.startsWith('---')) {
+        if (line.startsWith('-') && !line.startsWith('--- ')) {
             let removeCount = 0;
             let addCount = 0;
             let j = i;
-            while (j < lines.length && lines[j].startsWith('-') && !lines[j].startsWith('---')) { removeCount++; j++; }
-            while (j < lines.length && lines[j].startsWith('+') && !lines[j].startsWith('+++')) { addCount++; j++; }
+            while (j < lines.length && lines[j].startsWith('-') && !lines[j].startsWith('--- ')) { removeCount++; j++; }
+            while (j < lines.length && lines[j].startsWith('+') && !lines[j].startsWith('+++ ')) { addCount++; j++; }
 
             if (removeCount > 0 && addCount > 0) {
                 const maxPairs = Math.min(removeCount, addCount);
@@ -2188,7 +2191,7 @@ function parseDiffSideBySide(raw) {
             continue;
         }
 
-        if (line.startsWith('+') && !line.startsWith('+++')) {
+        if (line.startsWith('+') && !line.startsWith('+++ ')) {
             html += sbsRow('added', '', '', newLineNum, escapeHtml(line.substring(1)));
             newLineNum++;
             continue;
