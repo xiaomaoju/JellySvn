@@ -132,6 +132,10 @@ const elements = {
 async function init() {
     await loadSettings();
     initLanguage(state.settings.language);
+    // Apply saved theme on startup — previously applyTheme was only wired
+    // through the Settings form, so a saved non-default theme silently
+    // reverted to CSS defaults on every launch.
+    applyTheme(state.settings.theme || 'dark');
     renderSidebar();
     bindEvents();
     bindSvnOutputStream();
