@@ -35,9 +35,13 @@ function parseOpenArgs(argv) {
         } else if (arg === '--qa-msg' && i + 1 < args.length) {
             qaMsg = args[++i];
         } else if (arg === '--qa-msg-file' && i + 1 < args.length) {
+            const qaMsgPath = args[++i];
             try {
-                qaMsg = fs.readFileSync(args[++i], 'utf-8');
+                qaMsg = fs.readFileSync(qaMsgPath, 'utf-8');
             } catch (e) { /* ignore */ }
+            // Delete tmp file immediately after read so shell's `sleep 5 && rm`
+            // race doesn't matter — cold-start Electron can exceed 5s.
+            try { fs.unlinkSync(qaMsgPath); } catch (e) { /* ignore */ }
         } else if (!arg.startsWith('-')) {
             try {
                 const resolved = path.resolve(arg);
@@ -178,6 +182,25 @@ function saveData(filePath, data) {
     fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
 }
 
+// Guard mutating filesystem IPCs to paths inside a known project's working copy.
+// A buggy/compromised renderer otherwise could invoke deleteFile('/etc/...').
+// Dialog-originated paths bypass by passing `allowDialog: true`.
+function isPathWithinProjects(target) {
+    try {
+        const resolved = path.resolve(target);
+        const projects = loadData(PROJECTS_FILE);
+        if (!Array.isArray(projects)) return false;
+        for (const p of projects) {
+            if (!p || !p.path) continue;
+            const root = path.resolve(p.path);
+            if (resolved === root || resolved.startsWith(root + path.sep)) {
+                return true;
+            }
+        }
+    } catch (e) { /* fall through */ }
+    return false;
+}
+
 // --- Encryption helpers ---
 function encryptPassword(plaintext) {
     if (!safeStorage.isEncryptionAvailable()) {
@@ -311,9 +334,12 @@ ipcMain.handle('validate-repo', (event, repoPath) => {
     return { isValid: fs.existsSync(svnDir) && fs.statSync(svnDir).isDirectory() };
 });
 
-// Delete file
+// Delete file (restricted to paths inside a known project working copy)
 ipcMain.handle('delete-file', (event, filePath, cwd) => {
     const fullPath = cwd ? path.join(cwd, filePath) : filePath;
+    if (!isPathWithinProjects(fullPath)) {
+        return { success: false, error: 'Refused: path is outside any known project working copy.' };
+    }
     try {
         const stat = fs.statSync(fullPath);
         if (stat.isDirectory()) {
@@ -327,17 +353,28 @@ ipcMain.handle('delete-file', (event, filePath, cwd) => {
     }
 });
 
-// List directory contents
+// List directory contents (with size + mtime for tree view)
 ipcMain.handle('list-directory', (event, dirPath) => {
     try {
         const entries = fs.readdirSync(dirPath, { withFileTypes: true });
         const items = entries
             .filter(e => e.name !== '.svn')
-            .map(e => ({
-                name: e.name,
-                type: e.isDirectory() ? 'directory' : 'file',
-                path: path.join(dirPath, e.name)
-            }))
+            .map(e => {
+                const full = path.join(dirPath, e.name);
+                const info = {
+                    name: e.name,
+                    type: e.isDirectory() ? 'directory' : 'file',
+                    path: full,
+                    size: null,
+                    mtime: null,
+                };
+                try {
+                    const st = fs.statSync(full);
+                    info.size = st.size;
+                    info.mtime = st.mtimeMs;
+                } catch (err) { /* symlink to nothing, permission, etc. */ }
+                return info;
+            })
             .sort((a, b) => {
                 if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
                 return a.name.localeCompare(b.name);
@@ -661,42 +698,12 @@ ipcMain.handle('run-svn', (event, command, cwd, repoUrl) => {
             if (code === 0) {
                 resolve({ success: true, output: stdout });
             } else {
-                // Fallback: retry with --password flag if stdin method fails
-                if (passwordForStdin && stderr.includes('auth')) {
-                    const retryArgs = [...args, '--password', passwordForStdin];
-                    const retryProc = spawn('svn', retryArgs, {
-                        cwd: spawnCwd,
-                        env: { ...process.env }
-                    });
-                    let retryOut = '';
-                    let retryErr = '';
-                    retryProc.stdout.on('data', (d) => {
-                        const chunk = d.toString();
-                        retryOut += chunk;
-                        if (mainWindow && !mainWindow.isDestroyed()) {
-                            mainWindow.webContents.send('svn-output', { stream: 'stdout', data: chunk });
-                        }
-                    });
-                    retryProc.stderr.on('data', (d) => {
-                        const chunk = d.toString();
-                        retryErr += chunk;
-                        if (mainWindow && !mainWindow.isDestroyed()) {
-                            mainWindow.webContents.send('svn-output', { stream: 'stderr', data: chunk });
-                        }
-                    });
-                    retryProc.on('close', (retryCode) => {
-                        if (retryCode === 0) {
-                            resolve({ success: true, output: retryOut });
-                        } else {
-                            resolve({ success: false, output: retryOut, error: retryErr || retryOut });
-                        }
-                    });
-                    retryProc.on('error', (err) => {
-                        resolve({ success: false, error: err.message });
-                    });
-                } else {
-                    resolve({ success: false, output: stdout, error: stderr || stdout });
-                }
+                // Never retry with --password on the command line — that
+                // would leak the plaintext password to the process list
+                // (visible to every user via `ps`). Primary stdin delivery
+                // already works on all supported svn versions; if it fails,
+                // surface the auth error to the UI instead.
+                resolve({ success: false, output: stdout, error: stderr || stdout });
             }
         });
 
