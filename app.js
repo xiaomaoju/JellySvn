@@ -100,8 +100,10 @@ const state = {
     shelveList: [],
 
     // Repo browser
-    repoBrowserPath: '',
-    repoBrowserEntries: [],
+    repoBrowserRoot: '',            // normalized root URL user is browsing
+    repoBrowserTree: {},            // url → entries[] (lazy-loaded per folder)
+    repoBrowserExpanded: new Set(), // set of expanded dir URLs
+    repoBrowserLoading: new Set(),  // urls currently fetching (for spinner)
 
     // Log compare
     logSelectedRevisions: new Set()
@@ -623,6 +625,10 @@ function selectProject(index) {
         state.shelveList = [];
         state.changelists = {};
         state.mergePreview = [];
+        state.repoBrowserRoot = '';
+        state.repoBrowserTree = {};
+        state.repoBrowserExpanded = new Set();
+        state.repoBrowserLoading = new Set();
         renderTabs();
         refreshStatus();
         // Restart watcher if auto-refresh enabled
@@ -4871,6 +4877,177 @@ function clearCommitFilter() {
 // =============================================
 // === Repository Browser ===
 // =============================================
+// === Repository Browser (tree view, lazy + recursive modes) ===
+
+function normalizeRepoUrl(url) {
+    return (url || '').trim().replace(/\/+$/, '');
+}
+
+function joinRepoUrl(parent, name) {
+    return normalizeRepoUrl(parent) + '/' + name;
+}
+
+// Parse `svn list --verbose` output.
+// Columns: revision  author  [size]  month day time  name
+// Directory rows omit the size column — detect by presence of trailing '/'.
+function parseSvnListVerbose(output) {
+    const entries = [];
+    for (const raw of output.split('\n')) {
+        const line = raw.replace(/\s+$/, '');
+        if (!line.trim()) continue;
+        const parts = line.trim().split(/\s+/);
+        if (parts.length < 5) continue;
+        const rev = parts[0];
+        const author = parts[1];
+        let size = null;
+        let dateStart = 2;
+        if (/^\d+$/.test(parts[2])) {
+            size = parseInt(parts[2], 10);
+            dateStart = 3;
+        }
+        const date = parts.slice(dateStart, dateStart + 3).join(' ');
+        const fullName = parts.slice(dateStart + 3).join(' ');
+        if (!fullName || fullName === './' || fullName === '.') continue;
+        const isDir = fullName.endsWith('/');
+        const name = isDir ? fullName.slice(0, -1) : fullName;
+        entries.push({
+            name,
+            type: isDir ? 'dir' : 'file',
+            revision: rev,
+            author,
+            size,
+            date,
+        });
+    }
+    entries.sort((a, b) => {
+        if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+        return a.name.localeCompare(b.name);
+    });
+    return entries;
+}
+
+async function fetchRepoFolder(url) {
+    const key = normalizeRepoUrl(url);
+    state.repoBrowserLoading.add(key);
+    render();
+    const result = await runSvnSilent(['list', '--verbose', key]);
+    state.repoBrowserLoading.delete(key);
+    if (!result || !result.output) {
+        state.repoBrowserTree[key] = [];
+        logToConsole(`Failed to browse: ${key}`, 'error');
+        render();
+        return false;
+    }
+    state.repoBrowserTree[key] = parseSvnListVerbose(result.output);
+    render();
+    return true;
+}
+
+async function fetchRepoRecursive(rootUrl) {
+    const key = normalizeRepoUrl(rootUrl);
+    state.repoBrowserLoading.add(key);
+    render();
+    const result = await runSvnSilent(['list', '-R', '--verbose', key]);
+    state.repoBrowserLoading.delete(key);
+    if (!result || !result.output) {
+        logToConsole(`Recursive list failed: ${key}`, 'error');
+        render();
+        return;
+    }
+    // Each row's name is a path relative to the root. Bucket entries by
+    // their parent URL so the tree renderer can walk them the same way
+    // as single-folder results.
+    const buckets = {};
+    buckets[key] = [];
+    state.repoBrowserExpanded.add(key);
+    for (const raw of result.output.split('\n')) {
+        const line = raw.replace(/\s+$/, '');
+        if (!line.trim()) continue;
+        const parts = line.trim().split(/\s+/);
+        if (parts.length < 5) continue;
+        const rev = parts[0];
+        const author = parts[1];
+        let size = null;
+        let dateStart = 2;
+        if (/^\d+$/.test(parts[2])) {
+            size = parseInt(parts[2], 10);
+            dateStart = 3;
+        }
+        const date = parts.slice(dateStart, dateStart + 3).join(' ');
+        const relPath = parts.slice(dateStart + 3).join(' ');
+        if (!relPath || relPath === './' || relPath === '.') continue;
+        const isDir = relPath.endsWith('/');
+        const cleanRel = isDir ? relPath.slice(0, -1) : relPath;
+        const segments = cleanRel.split('/');
+        const name = segments[segments.length - 1];
+        const parentRel = segments.slice(0, -1).join('/');
+        const parentUrl = parentRel ? key + '/' + parentRel : key;
+        if (!buckets[parentUrl]) buckets[parentUrl] = [];
+        buckets[parentUrl].push({
+            name,
+            type: isDir ? 'dir' : 'file',
+            revision: rev,
+            author,
+            size,
+            date,
+        });
+        if (isDir) {
+            const dirUrl = key + '/' + cleanRel;
+            if (!buckets[dirUrl]) buckets[dirUrl] = [];
+            state.repoBrowserExpanded.add(dirUrl);
+        }
+    }
+    for (const [u, arr] of Object.entries(buckets)) {
+        arr.sort((a, b) => {
+            if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+            return a.name.localeCompare(b.name);
+        });
+        state.repoBrowserTree[u] = arr;
+    }
+    const total = Object.values(buckets).reduce((s, a) => s + a.length, 0);
+    logToConsole(`Loaded recursive tree: ${total} entries from ${key}`, 'success');
+    render();
+}
+
+async function browseRepoFromInput() {
+    const urlInput = document.getElementById('repo-browser-url');
+    const url = normalizeRepoUrl(urlInput ? urlInput.value : '');
+    if (!url) return alert('Please enter a repository URL.');
+    state.repoBrowserRoot = url;
+    state.repoBrowserTree = {};
+    state.repoBrowserExpanded = new Set([url]);
+    state.repoBrowserLoading = new Set();
+    logToConsole(`Browsing: ${url}`, 'system');
+    await fetchRepoFolder(url);
+}
+
+async function browseRepoRecursive() {
+    const urlInput = document.getElementById('repo-browser-url');
+    const url = normalizeRepoUrl(urlInput ? urlInput.value : state.repoBrowserRoot);
+    if (!url) return alert('Please enter a repository URL.');
+    state.repoBrowserRoot = url;
+    state.repoBrowserTree = {};
+    state.repoBrowserExpanded = new Set([url]);
+    state.repoBrowserLoading = new Set();
+    logToConsole(`Loading full tree: ${url}`, 'system');
+    await fetchRepoRecursive(url);
+}
+
+async function toggleRepoFolder(url) {
+    const key = normalizeRepoUrl(url);
+    if (state.repoBrowserExpanded.has(key)) {
+        state.repoBrowserExpanded.delete(key);
+        render();
+        return;
+    }
+    state.repoBrowserExpanded.add(key);
+    if (!state.repoBrowserTree[key]) {
+        await fetchRepoFolder(key);
+    } else {
+        render();
+    }
+}
+
 function renderRepoBrowser() {
     const project = state.projects[state.selectedProjectIndex];
     if (!project) {
@@ -4880,104 +5057,114 @@ function renderRepoBrowser() {
 
     let html = '<div class="repo-browser-container">';
 
-    // URL input
+    // URL input + action buttons
+    const inputValue = state.repoBrowserRoot || project.url || '';
     html += `<div class="section-label">${t('repo.repoUrl')}</div>
     <div class="auth-form">
         <div class="auth-form-row">
-            <input type="text" id="repo-browser-url" class="auth-form-input" style="flex:3" placeholder="${t('repo.urlPlaceholder')}" value="${escapeHtml(state.repoBrowserPath || project.url || '')}">
+            <input type="text" id="repo-browser-url" class="auth-form-input" style="flex:3" placeholder="${t('repo.urlPlaceholder')}" value="${escapeHtml(inputValue)}">
             <button class="btn-primary btn-small" onclick="browseRepoFromInput()">${t('btn.browse')}</button>
+            <button class="btn-secondary btn-small" onclick="browseRepoRecursive()">${t('repo.loadFullTree')}</button>
         </div>
     </div>`;
 
-    // Breadcrumb
-    if (state.repoBrowserPath) {
-        html += `<div class="section-label">${t('repo.path')}</div>`;
-        html += '<div class="settings-card" style="padding: 10px 16px;">';
-        const parts = state.repoBrowserPath.replace(/\/$/, '').split('/');
-        let breadcrumbHtml = '';
-        for (let i = 0; i < parts.length; i++) {
-            const pathSoFar = parts.slice(0, i + 1).join('/');
-            if (i >= 3) { // Skip protocol parts (http:, , host)
-                if (breadcrumbHtml) breadcrumbHtml += ' <span style="color: var(--text-dim); margin: 0 4px;">/</span> ';
-                breadcrumbHtml += `<a href="#" onclick="navigateRepoBrowser('${escapePath(pathSoFar)}/'); return false;" style="color: var(--accent); text-decoration: none;">${escapeHtml(parts[i])}</a>`;
-            }
-        }
-        if (!breadcrumbHtml) breadcrumbHtml = escapeHtml(state.repoBrowserPath);
-        html += `<div style="font-family: monospace; font-size: 13px;">${breadcrumbHtml}</div>`;
+    if (state.repoBrowserRoot) {
+        const total = Object.values(state.repoBrowserTree).reduce((s, arr) => s + (arr ? arr.length : 0), 0);
+        html += `<div class="repo-tree-header">
+            <span class="repo-tree-url" title="${escapeHtml(state.repoBrowserRoot)}">${escapeHtml(state.repoBrowserRoot)}</span>
+            <span class="repo-tree-total">${t('repo.contents', { count: total })}</span>
+        </div>`;
+        html += '<div class="repo-tree-container">';
+        html += renderRepoTreeNode(state.repoBrowserRoot, 0, true);
         html += '</div>';
-    }
-
-    // Directory listing
-    if (state.repoBrowserEntries && state.repoBrowserEntries.length > 0) {
-        html += `<div class="section-label">${t('repo.contents', { count: state.repoBrowserEntries.length })}</div>`;
-        html += '<div class="status-list">';
-        for (const entry of state.repoBrowserEntries) {
-            const isDir = entry.type === 'dir';
-            const icon = isDir ? '📁' : '📄';
-            const fullUrl = state.repoBrowserPath.endsWith('/')
-                ? state.repoBrowserPath + entry.name
-                : state.repoBrowserPath + '/' + entry.name;
-            const ep = escapePath(fullUrl);
-
-            html += `<div class="status-card" ${isDir ? `onclick="navigateRepoBrowser('${ep}/')" style="cursor: pointer;"` : ''}>
-                <div class="file-info">
-                    <span style="margin-right: 8px; font-size: 16px;">${icon}</span>
-                    <span class="file-path">${escapeHtml(entry.name)}${isDir ? '/' : ''}</span>
-                </div>
-                <div class="file-actions" onclick="event.stopPropagation()">
-                    <button class="btn-secondary btn-small" onclick="repoBrowserCopyTo('${ep}')">${t('repo.copyTo')}</button>
-                </div>
-            </div>`;
-        }
-        html += '</div>';
-    } else if (state.repoBrowserEntries) {
-        html += `<div class="empty-state" style="padding: 48px 0;"><p>${t('repo.emptyDir')}</p></div>`;
     }
 
     html += '</div>';
     elements.contentArea.innerHTML = html;
 }
 
-function browseRepoFromInput() {
-    const urlInput = document.getElementById('repo-browser-url');
-    const url = urlInput ? urlInput.value.trim() : '';
-    if (!url) return alert('Please enter a repository URL.');
-    browseRepo(url);
-}
+function renderRepoTreeNode(url, depth, isRoot) {
+    const key = normalizeRepoUrl(url);
+    const isExpanded = state.repoBrowserExpanded.has(key);
+    const isLoading = state.repoBrowserLoading.has(key);
+    const children = state.repoBrowserTree[key];
+    const safeKey = escapePath(key);
+    const indent = depth * 20;
 
-async function browseRepo(url) {
-    if (!url) return;
-    logToConsole(`Browsing: ${url}`, 'system');
-
-    const result = await runSvnSilent(['list', url]);
-    if (!result || !result.output) {
-        logToConsole(`Failed to browse: ${url}`, 'error');
-        state.repoBrowserPath = url;
-        state.repoBrowserEntries = [];
-        render();
-        return;
+    let html = '';
+    if (isRoot) {
+        const rootName = key.split('/').pop() || key;
+        html += `<div class="tree-node tree-node-root" onclick="toggleRepoFolder('${safeKey}')">
+            <span class="tree-toggle ${isExpanded ? 'expanded' : ''}">&#9654;</span>
+            <span class="tree-icon">🌐</span>
+            <span class="tree-name">${escapeHtml(rootName)}/</span>
+            <span class="tree-meta">
+                ${isLoading ? '<span class="tree-meta-loading">loading…</span>' : ''}
+            </span>
+            <div class="tree-actions">
+                <button class="btn-secondary btn-small" onclick="repoBrowserCopyTo('${safeKey}', event)">${t('repo.copyTo')}</button>
+            </div>
+        </div>`;
     }
 
-    const entries = [];
-    const lines = result.output.trim().split('\n');
-    for (const line of lines) {
-        if (!line.trim()) continue;
-        const isDir = line.endsWith('/');
-        const name = isDir ? line.slice(0, -1) : line;
-        entries.push({ name, type: isDir ? 'dir' : 'file' });
+    if (!isExpanded) return html;
+
+    if (isLoading && !children) {
+        html += `<div class="tree-node tree-node-loading" style="padding-left: ${indent + 24}px">
+            <span class="tree-toggle"></span>
+            <span class="tree-icon">⏳</span>
+            <span class="tree-name">Loading…</span>
+        </div>`;
+        return html;
     }
 
-    state.repoBrowserPath = url;
-    state.repoBrowserEntries = entries;
-    logToConsole(`Found ${entries.length} entries in ${url}`, 'success');
-    render();
+    if (!children || children.length === 0) {
+        html += `<div class="tree-node tree-node-empty" style="padding-left: ${indent + 24}px">
+            <span class="tree-toggle"></span>
+            <span class="tree-icon">∅</span>
+            <span class="tree-name">${t('repo.emptyDir')}</span>
+        </div>`;
+        return html;
+    }
+
+    for (const entry of children) {
+        const childUrl = joinRepoUrl(key, entry.name);
+        const safeChild = escapePath(childUrl);
+        const sizeHtml = entry.size != null ? `<span class="tree-meta-size">${formatFileSize(entry.size)}</span>` : '';
+        const revHtml = `<span class="tree-meta-rev">r${escapeHtml(String(entry.revision))}</span>`;
+        const authorHtml = `<span class="tree-meta-author">${escapeHtml(entry.author)}</span>`;
+        const dateHtml = `<span class="tree-meta-date">${escapeHtml(entry.date)}</span>`;
+
+        if (entry.type === 'dir') {
+            const childExpanded = state.repoBrowserExpanded.has(normalizeRepoUrl(childUrl));
+            html += `<div class="tree-node" style="padding-left: ${indent + 20}px" onclick="toggleRepoFolder('${safeChild}')">
+                <span class="tree-toggle ${childExpanded ? 'expanded' : ''}">&#9654;</span>
+                <span class="tree-icon">${childExpanded ? '📂' : '📁'}</span>
+                <span class="tree-name" title="${escapeHtml(childUrl)}">${escapeHtml(entry.name)}/</span>
+                <span class="tree-meta">${revHtml}${authorHtml}${dateHtml}</span>
+                <div class="tree-actions">
+                    <button class="btn-secondary btn-small" onclick="repoBrowserCopyTo('${safeChild}', event)">${t('repo.copyTo')}</button>
+                </div>
+            </div>`;
+            html += renderRepoTreeNode(childUrl, depth + 1, false);
+        } else {
+            html += `<div class="tree-node tree-node-file" style="padding-left: ${indent + 20}px">
+                <span class="tree-toggle"></span>
+                <span class="tree-icon">📄</span>
+                <span class="tree-name file" title="${escapeHtml(childUrl)}">${escapeHtml(entry.name)}</span>
+                <span class="tree-meta">${revHtml}${authorHtml}${sizeHtml}${dateHtml}</span>
+                <div class="tree-actions">
+                    <button class="btn-secondary btn-small" onclick="repoBrowserCopyTo('${safeChild}', event)">${t('repo.copyTo')}</button>
+                </div>
+            </div>`;
+        }
+    }
+
+    return html;
 }
 
-function navigateRepoBrowser(path) {
-    browseRepo(path);
-}
-
-async function repoBrowserCopyTo(sourceUrl) {
+async function repoBrowserCopyTo(sourceUrl, event) {
+    if (event) event.stopPropagation();
     const dest = prompt('Enter destination URL for svn copy:', '');
     if (!dest || !dest.trim()) return;
 

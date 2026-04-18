@@ -477,6 +477,7 @@ const translations = {
         'repo.contents': 'Contents ({count} items)',
         'repo.copyTo': 'Copy to...',
         'repo.emptyDir': 'Empty directory.',
+        'repo.loadFullTree': 'Load Full Tree',
 
         // Shelve View
         'shelve.shelveChanges': 'Shelve Changes',
@@ -965,6 +966,7 @@ const translations = {
         'repo.contents': '내용 ({count}개 항목)',
         'repo.copyTo': '복사...',
         'repo.emptyDir': '빈 디렉토리입니다.',
+        'repo.loadFullTree': '전체 트리 로드',
 
         // Shelve View
         'shelve.shelveChanges': '변경사항 셸브',
