@@ -166,43 +166,59 @@ async function init() {
 
 // === Dynamic Sidebar Rendering ===
 function renderSidebar() {
-    const navItems = [
-        { id: 'btn-status', icon: '📊', key: 'nav.status', active: true },
-        { id: 'btn-update-all', icon: '📥', key: 'nav.updateAll' },
-        { id: 'btn-commit-view', icon: '📤', key: 'nav.commit' },
-        { id: 'btn-revert-view', icon: '🔄', key: 'nav.revert' },
-        { id: 'btn-checkout', icon: '🚀', key: 'nav.checkout' },
-        { id: 'btn-log', icon: '📜', key: 'nav.log' },
-        { id: 'btn-tree', icon: '📁', key: 'nav.tree' },
-        { id: 'btn-auth', icon: '🔑', key: 'nav.auth' },
-        { id: 'btn-properties', icon: '📋', key: 'nav.properties' },
-        { id: 'btn-branch', icon: '🌿', key: 'nav.branch' },
-        { id: 'btn-externals', icon: '🔗', key: 'nav.externals' },
-        { id: 'btn-lock', icon: '🔒', key: 'nav.lock' },
-        { id: 'btn-blame', icon: '👤', key: 'nav.blame' },
-        { id: 'btn-merge', icon: '🔀', key: 'nav.merge' },
-        { id: 'btn-export', icon: '📦', key: 'nav.export' },
-        { id: 'btn-search', icon: '🔍', key: 'nav.search' },
-        { id: 'btn-ignore', icon: '🚫', key: 'nav.ignore' },
-        { id: 'btn-repo-browser', icon: '🌐', key: 'nav.repoBrowser' },
-        { id: 'btn-shelve', icon: '📌', key: 'nav.shelve' },
-        { id: 'btn-tools', icon: '🛠️', key: 'nav.tools' },
-        { type: 'spacer' },
+    const navSections = [
+        { key: 'nav.section.core', items: [
+            { id: 'btn-status', icon: '📊', key: 'nav.status', active: true },
+            { id: 'btn-commit-view', icon: '📤', key: 'nav.commit' },
+            { id: 'btn-revert-view', icon: '🔄', key: 'nav.revert' },
+            { id: 'btn-update-all', icon: '📥', key: 'nav.updateAll' },
+            { id: 'btn-log', icon: '📜', key: 'nav.log' },
+        ] },
+        { key: 'nav.section.browse', items: [
+            { id: 'btn-tree', icon: '📁', key: 'nav.tree' },
+            { id: 'btn-repo-browser', icon: '🌐', key: 'nav.repoBrowser' },
+            { id: 'btn-search', icon: '🔍', key: 'nav.search' },
+            { id: 'btn-blame', icon: '👤', key: 'nav.blame' },
+        ] },
+        { key: 'nav.section.manage', items: [
+            { id: 'btn-checkout', icon: '🚀', key: 'nav.checkout' },
+            { id: 'btn-branch', icon: '🌿', key: 'nav.branch' },
+            { id: 'btn-externals', icon: '🔗', key: 'nav.externals' },
+            { id: 'btn-auth', icon: '🔑', key: 'nav.auth' },
+            { id: 'btn-properties', icon: '📋', key: 'nav.properties' },
+            { id: 'btn-ignore', icon: '🚫', key: 'nav.ignore' },
+            { id: 'btn-lock', icon: '🔒', key: 'nav.lock' },
+        ] },
+        { key: 'nav.section.advanced', items: [
+            { id: 'btn-merge', icon: '🔀', key: 'nav.merge' },
+            { id: 'btn-export', icon: '📦', key: 'nav.export' },
+            { id: 'btn-shelve', icon: '📌', key: 'nav.shelve' },
+            { id: 'btn-tools', icon: '🛠️', key: 'nav.tools' },
+        ] },
+    ];
+    const footerItems = [
         { id: 'btn-settings', icon: '⚙️', key: 'nav.settings' },
     ];
 
-    let html = '';
-    for (const item of navItems) {
-        if (item.type === 'spacer') {
-            html += '<div class="nav-spacer"></div>';
-            continue;
-        }
-        const activeView = state.currentView;
+    const activeView = state.currentView;
+    const renderItem = (item) => {
         const viewName = item.id.replace('btn-', '');
         const isActive = (viewName === activeView) || (item.active && activeView === 'status' && viewName === 'status');
-        html += `<button class="nav-item${isActive ? ' active' : ''}" id="${item.id}">
+        return `<button class="nav-item${isActive ? ' active' : ''}" id="${item.id}">
             <span class="icon">${item.icon}</span> ${t(item.key)}
         </button>`;
+    };
+
+    let html = '';
+    for (const section of navSections) {
+        html += `<div class="nav-section-title">${t(section.key)}</div>`;
+        for (const item of section.items) {
+            html += renderItem(item);
+        }
+    }
+    html += '<div class="nav-spacer"></div>';
+    for (const item of footerItems) {
+        html += renderItem(item);
     }
 
     elements.navMenu.innerHTML = html;
@@ -2558,6 +2574,26 @@ function renderTree() {
     elements.contentArea.innerHTML = html;
 }
 
+function formatFileSize(bytes) {
+    if (bytes == null) return '';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+    return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+}
+
+function formatMtime(ms) {
+    if (!ms) return '';
+    const d = new Date(ms);
+    const pad = n => String(n).padStart(2, '0');
+    const now = new Date();
+    const sameYear = d.getFullYear() === now.getFullYear();
+    if (sameYear) {
+        return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 function renderTreeChildren(parentPath, depth) {
     const items = state.treeData[parentPath];
     if (!items || items.length === 0) return '';
@@ -2567,13 +2603,18 @@ function renderTreeChildren(parentPath, depth) {
 
     for (const item of items) {
         const safePath = escapeHtml(item.path);
+        const mtime = formatMtime(item.mtime);
+        const mtimeHtml = mtime ? `<span class="tree-meta-mtime">${mtime}</span>` : '';
 
         if (item.type === 'directory') {
             const isExpanded = state.treeExpanded.has(item.path);
+            const children = state.treeData[item.path];
+            const countHtml = children ? `<span class="tree-meta-count">${children.length} item${children.length !== 1 ? 's' : ''}</span>` : '';
             html += `<div class="tree-node" data-path="${safePath}" style="padding-left: ${indent}px" onclick="toggleTreeFolder('${safePath}')">
                 <span class="tree-toggle ${isExpanded ? 'expanded' : ''}">&#9654;</span>
                 <span class="tree-icon">${isExpanded ? '📂' : '📁'}</span>
                 <span class="tree-name">${escapeHtml(item.name)}</span>
+                <span class="tree-meta">${countHtml}${mtimeHtml}</span>
                 <div class="tree-actions">
                     <button class="btn-secondary btn-small" onclick="treeFolderUpdate('${safePath}', event)">Update</button>
                     <button class="btn-secondary btn-small" onclick="treeFolderStatus('${safePath}', event)">Status</button>
@@ -2588,10 +2629,12 @@ function renderTreeChildren(parentPath, depth) {
                 html += renderTreeChildren(item.path, depth + 1);
             }
         } else {
+            const sizeHtml = item.size != null ? `<span class="tree-meta-size">${formatFileSize(item.size)}</span>` : '';
             html += `<div class="tree-node tree-node-file" data-path="${safePath}" style="padding-left: ${indent}px">
                 <span class="tree-toggle"></span>
                 <span class="tree-icon">📄</span>
                 <span class="tree-name file">${escapeHtml(item.name)}</span>
+                <span class="tree-meta">${sizeHtml}${mtimeHtml}</span>
             </div>`;
         }
     }

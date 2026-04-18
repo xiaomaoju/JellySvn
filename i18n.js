@@ -26,6 +26,10 @@ const translations = {
         'nav.shelve': 'Shelve',
         'nav.tools': 'Tools',
         'nav.settings': 'Settings',
+        'nav.section.core': 'Work',
+        'nav.section.browse': 'Browse',
+        'nav.section.manage': 'Manage',
+        'nav.section.advanced': 'Advanced',
 
         // View Titles
         'view.status': 'Working Copy Status',
@@ -510,6 +514,10 @@ const translations = {
         'nav.shelve': '셸브',
         'nav.tools': '도구',
         'nav.settings': '설정',
+        'nav.section.core': '작업',
+        'nav.section.browse': '탐색',
+        'nav.section.manage': '관리',
+        'nav.section.advanced': '고급',
 
         // View Titles
         'view.status': '작업 사본 상태',
