@@ -1561,12 +1561,15 @@ async function downloadFolderPlaceholders(folderPath, event) {
     event.stopPropagation();
     const project = state.projects[state.selectedProjectIndex];
     if (!project) return;
-    const children = state.treeData[folderPath];
-    if (!children) return;
-    const phFiles = children.filter(c => c.type === 'file' && c.size === 0);
-    if (phFiles.length === 0) return;
-
-    const relPaths = phFiles.map(f => f.path.startsWith(project.path) ? f.path.substring(project.path.length + 1) : f.path);
+    const scanResult = await window.api.placeholderScan(folderPath);
+    if (!scanResult.success || scanResult.placeholders === 0) return;
+    const relPaths = scanResult.files
+        .filter(f => f.isPlaceholder)
+        .map(f => {
+            const absPath = folderPath + '/' + f.relPath;
+            return absPath.startsWith(project.path) ? absPath.substring(project.path.length + 1) : f.relPath;
+        });
+    if (relPaths.length === 0) return;
 
     const progressHandler = (payload) => {
         showOperation(t('placeholder.downloading', { current: payload.current, total: payload.total }));
@@ -1587,13 +1590,12 @@ async function downloadFolderPlaceholders(folderPath, event) {
 
 async function truncateFolderFiles(folderPath, event) {
     event.stopPropagation();
-    const children = state.treeData[folderPath];
-    if (!children) return;
-    const realFiles = children.filter(c => c.type === 'file' && c.size > 0);
-    if (realFiles.length === 0) return;
-    if (!confirm(`Convert ${realFiles.length} file(s) to placeholders?`)) return;
-
-    const absPaths = realFiles.map(f => f.path);
+    const scanResult = await window.api.placeholderScan(folderPath);
+    if (!scanResult.success || scanResult.realFiles === 0) return;
+    if (!confirm(`Convert ${scanResult.realFiles} file(s) to placeholders?`)) return;
+    const absPaths = scanResult.files
+        .filter(f => !f.isPlaceholder)
+        .map(f => folderPath + '/' + f.relPath);
     const result = await window.api.placeholderTruncate({ files: absPaths });
     logToConsole(`Folder truncate: ${result.success} succeeded, ${result.failed} failed`, result.failed > 0 ? 'warning' : 'success');
     const refreshed = await window.api.listDirectory(folderPath);

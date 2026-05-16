@@ -63,5 +63,8 @@ contextBridge.exposeInMainWorld('api', {
     placeholderDownload: (opts) => ipcRenderer.invoke('placeholder:download', opts),
     placeholderTruncate: (opts) => ipcRenderer.invoke('placeholder:truncate', opts),
     placeholderSyncStructure: (opts) => ipcRenderer.invoke('placeholder:syncStructure', opts),
-    onPlaceholderProgress: (callback) => ipcRenderer.on('placeholder:progress', (_event, payload) => callback(payload)),
+    onPlaceholderProgress: (callback) => {
+        ipcRenderer.removeAllListeners('placeholder:progress');
+        ipcRenderer.on('placeholder:progress', (_event, payload) => callback(payload));
+    },
 });

@@ -764,6 +764,9 @@ ipcMain.handle('placeholder:scan', async (event, dirPath) => {
 
 ipcMain.handle('placeholder:download', async (event, { wcRoot, files, remoteUrl }) => {
     let baseUrl = remoteUrl || '';
+    if (!isPathWithinProjects(wcRoot)) {
+        return { success: 0, failed: files.length, error: 'Refused: wcRoot is outside any known project.' };
+    }
 
     if (!baseUrl && wcRoot) {
         try {
@@ -789,6 +792,12 @@ ipcMain.handle('placeholder:download', async (event, { wcRoot, files, remoteUrl 
     for (let i = 0; i < files.length; i++) {
         const relPath = files[i];
         const localPath = path.join(wcRoot, relPath);
+        const resolvedLocal = path.resolve(localPath);
+        const resolvedRoot = path.resolve(wcRoot);
+        if (!resolvedLocal.startsWith(resolvedRoot + path.sep) && resolvedLocal !== resolvedRoot) {
+            failed++;
+            continue;
+        }
         const fileUrl = baseUrl.replace(/\/+$/, '') + '/' + relPath.replace(/\\/g, '/');
 
         event.sender.send('placeholder:progress', { current: i + 1, total: files.length, file: relPath });
@@ -840,6 +849,9 @@ ipcMain.handle('placeholder:truncate', async (event, { files }) => {
 ipcMain.handle('placeholder:syncStructure', async (event, { remoteUrl, localDir }) => {
     if (!remoteUrl || !localDir) {
         return { success: false, error: 'Missing remoteUrl or localDir' };
+    }
+    if (!isPathWithinProjects(localDir)) {
+        return { success: false, error: 'Refused: localDir is outside any known project.' };
     }
 
     try {
