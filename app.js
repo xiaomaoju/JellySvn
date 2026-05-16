@@ -35,6 +35,7 @@ const state = {
     treeData: {},
     treeExpanded: new Set(),
     treeFolderStatus: {},
+    treeIsWorkingCopy: true,
 
     // Properties view
     properties: [],
@@ -1600,6 +1601,31 @@ async function truncateFolderFiles(folderPath, event) {
     render();
 }
 
+async function syncPlaceholderStructure(event) {
+    event.stopPropagation();
+    const project = state.projects[state.selectedProjectIndex];
+    if (!project) return;
+    const remoteUrl = state.settings.placeholderRemoteUrl;
+    if (!remoteUrl) {
+        alert('Please set Remote Repository URL in Settings first.');
+        return;
+    }
+    showOperation(t('placeholder.syncStructure') + '...');
+    const result = await window.api.placeholderSyncStructure({
+        remoteUrl,
+        localDir: project.path
+    });
+    hideOperation();
+    if (result.success) {
+        logToConsole(`Sync complete: ${result.dirsCreated} dirs, ${result.filesCreated} files created, ${result.deleted} removed`, 'success');
+    } else {
+        logToConsole(`Sync failed: ${result.error}`, 'error');
+    }
+    state.treeData = {};
+    state.treeExpanded.clear();
+    render();
+}
+
 async function addAllUntracked() {
     const untracked = state.workingCopy.filter(f => f.status === 'untracked');
     if (untracked.length === 0) return;
@@ -2765,6 +2791,8 @@ async function fetchTree() {
 
     const rootPath = project.path;
     try {
+        const repoCheck = await window.api.validateRepo(project.path);
+        state.treeIsWorkingCopy = repoCheck.isValid;
         const result = await window.api.listDirectory(rootPath);
         if (result.success) {
             state.treeData[rootPath] = result.items;
@@ -2875,6 +2903,8 @@ function renderTree() {
         <div class="tree-actions">
             <button class="btn-secondary btn-small" onclick="treeFolderUpdate('${escapeHtml(rootPath)}', event)">Update</button>
             <button class="btn-secondary btn-small" onclick="treeFolderStatus('${escapeHtml(rootPath)}', event)">Status</button>
+            ${(!state.treeIsWorkingCopy && state.placeholderEnabled && state.settings.placeholderRemoteUrl) ?
+                `<button class="btn-secondary btn-small" onclick="syncPlaceholderStructure(event)">${t('placeholder.syncStructure')}</button>` : ''}
         </div>
     </div>`;
 
