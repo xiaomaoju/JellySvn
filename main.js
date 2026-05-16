@@ -1,7 +1,15 @@
 const { app, BrowserWindow, ipcMain, dialog, safeStorage, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
+
+// Ensure common tool paths are in PATH (macOS GUI apps don't inherit shell PATH)
+if (process.platform === 'darwin') {
+    const extra = ['/usr/local/bin', '/opt/homebrew/bin', '/opt/homebrew/sbin'];
+    const current = process.env.PATH || '';
+    const missing = extra.filter(p => !current.split(':').includes(p));
+    if (missing.length) process.env.PATH = [...missing, current].join(':');
+}
 
 // Use app.getPath('userData') for writable user data in production
 function getDataDir() {
