@@ -1,14 +1,14 @@
 {
   "name": "jelly-svn",
   "version": "1.1.0",
-  "description": "JellySvn - Premium SVN GUI Client for macOS",
+  "description": "JellySvn - Premium SVN GUI Client",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "build": "electron-builder --mac",
-    "build:dmg": "electron-builder --mac dmg",
-    "build:zip": "electron-builder --mac zip",
-    "build:universal": "electron-builder --mac --universal"
+    "build:mac": "electron-builder --mac dmg zip",
+    "build:win": "electron-builder --win nsis portable",
+    "build:all": "electron-builder --mac dmg zip --win nsis portable"
   },
   "build": {
     "appId": "com.jellysvn.app",
@@ -40,6 +40,29 @@
       "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "darkModeSupport": true,
       "minimumSystemVersion": "12.0"
+    },
+    "win": {
+      "icon": "Assets/icon.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "Assets/icon.png",
+      "uninstallerIcon": "Assets/icon.png",
+      "installerHeaderIcon": "Assets/icon.png"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-portable.exe"
     },
     "dmg": {
       "sign": false,
