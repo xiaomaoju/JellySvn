@@ -1668,6 +1668,31 @@ async function truncateFolderFiles(folderPath, event) {
     render();
 }
 
+async function excludeFileFromTree(filePath, event) {
+    event.stopPropagation();
+    const project = state.projects[state.selectedProjectIndex];
+    if (!project) return;
+    const fileRelPath = filePath.startsWith(project.path) ? filePath.substring(project.path.length + 1) : filePath;
+    showOperation(t('sparse.truncate'));
+    const result = await window.api.placeholderExcludeFile({
+        wcRoot: project.path,
+        fileRelPath
+    });
+    hideOperation();
+    if (result.success) {
+        logToConsole(`Excluded: ${filePath.split('/').pop()}`, 'success');
+        const parentDir = filePath.substring(0, filePath.lastIndexOf('/'));
+        const parentItems = state.treeData[parentDir];
+        if (parentItems) {
+            const entry = parentItems.find(i => i.path === filePath);
+            if (entry) { entry.remote = true; entry.size = null; entry.mtime = null; }
+        }
+    } else {
+        logToConsole(`Exclude failed: ${result.error}`, 'error');
+    }
+    render();
+}
+
 async function syncPlaceholderStructure(event) {
     event.stopPropagation();
     const project = state.projects[state.selectedProjectIndex];
@@ -3194,6 +3219,7 @@ function renderTreeChildren(parentPath, depth) {
                 fileActions = `<button class="btn-secondary btn-small" onclick="downloadPlaceholderTree('${safePath}', event)">${t('placeholder.download')}</button>`;
             } else {
                 fileActions = `<button class="btn-secondary btn-small" onclick="revealInFileManager('${safePath}', event)">${t('tree.revealInFinder')}</button>`;
+                fileActions += `<button class="btn-secondary btn-small btn-danger-subtle" onclick="excludeFileFromTree('${safePath}', event)">${t('sparse.truncate')}</button>`;
             }
             html += `<div class="tree-node tree-node-file${remoteClass}" data-path="${safePath}" style="padding-left: ${indent}px">
                 <span class="tree-toggle"></span>

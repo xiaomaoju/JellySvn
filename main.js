@@ -1194,6 +1194,28 @@ ipcMain.handle('placeholder:downloadFile', async (event, { wcRoot, fileRelPath }
     }
 });
 
+// Exclude a single file from working copy: svn update --set-depth exclude
+ipcMain.handle('placeholder:excludeFile', async (event, { wcRoot, fileRelPath }) => {
+    const svnRoot = findSvnRoot(wcRoot) || wcRoot;
+    if (!isPathWithinProjects(svnRoot)) {
+        return { success: false, error: 'Refused: path outside known project' };
+    }
+    const targetPath = path.join(svnRoot, fileRelPath);
+    const updateArgs = ['update', '--set-depth', 'exclude', targetPath, '--non-interactive', '--trust-server-cert'];
+    try {
+        await new Promise((resolve, reject) => {
+            const proc = spawn('svn', updateArgs, { cwd: svnRoot });
+            let err = '';
+            proc.stderr.on('data', d => err += d.toString());
+            proc.on('close', code => code === 0 ? resolve() : reject(new Error(err)));
+            proc.on('error', reject);
+        });
+        return { success: true };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+});
+
 // Truncate folder via sparse checkout: svn update --set-depth empty
 ipcMain.handle('placeholder:truncateFolder', async (event, { wcRoot, folderRelPath }) => {
     const svnRoot = findSvnRoot(wcRoot) || wcRoot;
