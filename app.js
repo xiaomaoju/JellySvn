@@ -1518,6 +1518,88 @@ async function bulkPlaceholderTruncate() {
     refreshStatus();
 }
 
+async function downloadPlaceholderTree(filePath, event) {
+    event.stopPropagation();
+    const project = state.projects[state.selectedProjectIndex];
+    if (!project) return;
+    const relPath = filePath.startsWith(project.path) ? filePath.substring(project.path.length + 1) : filePath;
+    showOperation(t('placeholder.downloading', { current: 1, total: 1 }));
+    const result = await window.api.placeholderDownload({
+        wcRoot: project.path,
+        files: [relPath],
+        remoteUrl: state.settings.placeholderRemoteUrl || ''
+    });
+    hideOperation();
+    if (result.success > 0) {
+        logToConsole(`Downloaded: ${relPath}`, 'success');
+    } else {
+        logToConsole(`Failed to download: ${relPath}`, 'error');
+    }
+    const parentDir = filePath.substring(0, filePath.lastIndexOf('/'));
+    const refreshed = await window.api.listDirectory(parentDir);
+    if (refreshed.success) state.treeData[parentDir] = refreshed.items;
+    render();
+}
+
+async function truncatePlaceholderTree(filePath, event) {
+    event.stopPropagation();
+    if (!confirm(`Convert to placeholder? ${filePath}`)) return;
+    const result = await window.api.placeholderTruncate({ files: [filePath] });
+    if (result.success > 0) {
+        logToConsole(`Converted to placeholder: ${filePath}`, 'success');
+    } else {
+        logToConsole(`Failed to truncate: ${filePath}`, 'error');
+    }
+    const parentDir = filePath.substring(0, filePath.lastIndexOf('/'));
+    const refreshed = await window.api.listDirectory(parentDir);
+    if (refreshed.success) state.treeData[parentDir] = refreshed.items;
+    render();
+}
+
+async function downloadFolderPlaceholders(folderPath, event) {
+    event.stopPropagation();
+    const project = state.projects[state.selectedProjectIndex];
+    if (!project) return;
+    const children = state.treeData[folderPath];
+    if (!children) return;
+    const phFiles = children.filter(c => c.type === 'file' && c.size === 0);
+    if (phFiles.length === 0) return;
+
+    const relPaths = phFiles.map(f => f.path.startsWith(project.path) ? f.path.substring(project.path.length + 1) : f.path);
+
+    const progressHandler = (payload) => {
+        showOperation(t('placeholder.downloading', { current: payload.current, total: payload.total }));
+    };
+    window.api.onPlaceholderProgress(progressHandler);
+
+    const result = await window.api.placeholderDownload({
+        wcRoot: project.path,
+        files: relPaths,
+        remoteUrl: state.settings.placeholderRemoteUrl || ''
+    });
+    hideOperation();
+    logToConsole(`Folder download: ${result.success} succeeded, ${result.failed} failed`, result.failed > 0 ? 'warning' : 'success');
+    const refreshed = await window.api.listDirectory(folderPath);
+    if (refreshed.success) state.treeData[folderPath] = refreshed.items;
+    render();
+}
+
+async function truncateFolderFiles(folderPath, event) {
+    event.stopPropagation();
+    const children = state.treeData[folderPath];
+    if (!children) return;
+    const realFiles = children.filter(c => c.type === 'file' && c.size > 0);
+    if (realFiles.length === 0) return;
+    if (!confirm(`Convert ${realFiles.length} file(s) to placeholders?`)) return;
+
+    const absPaths = realFiles.map(f => f.path);
+    const result = await window.api.placeholderTruncate({ files: absPaths });
+    logToConsole(`Folder truncate: ${result.success} succeeded, ${result.failed} failed`, result.failed > 0 ? 'warning' : 'success');
+    const refreshed = await window.api.listDirectory(folderPath);
+    if (refreshed.success) state.treeData[folderPath] = refreshed.items;
+    render();
+}
+
 async function addAllUntracked() {
     const untracked = state.workingCopy.filter(f => f.status === 'untracked');
     if (untracked.length === 0) return;
@@ -2844,11 +2926,30 @@ function renderTreeChildren(parentPath, depth) {
             const isExpanded = state.treeExpanded.has(item.path);
             const children = state.treeData[item.path];
             const countHtml = children ? `<span class="tree-meta-count">${children.length} item${children.length !== 1 ? 's' : ''}</span>` : '';
+            // Placeholder folder stats
+            let phFolderHtml = '';
+            if (state.placeholderEnabled && children) {
+                const allFiles = children.filter(c => c.type === 'file');
+                const phCount = allFiles.filter(c => c.size === 0).length;
+                const realCount = allFiles.filter(c => c.size > 0).length;
+                if (allFiles.length > 0) {
+                    const statsText = t('placeholder.folderStats', { total: allFiles.length, count: phCount });
+                    phFolderHtml = `<span class="placeholder-folder-stats">(${statsText})</span>`;
+                    phFolderHtml += '<span class="placeholder-folder-actions">';
+                    if (phCount > 0) {
+                        phFolderHtml += `<button class="btn-secondary btn-small" onclick="downloadFolderPlaceholders('${safePath}', event)">${t('placeholder.downloadAll')}</button>`;
+                    }
+                    if (realCount > 0) {
+                        phFolderHtml += `<button class="btn-secondary btn-small" onclick="truncateFolderFiles('${safePath}', event)">${t('placeholder.truncateAll')}</button>`;
+                    }
+                    phFolderHtml += '</span>';
+                }
+            }
             html += `<div class="tree-node" data-path="${safePath}" style="padding-left: ${indent}px" onclick="toggleTreeFolder('${safePath}')">
                 <span class="tree-toggle ${isExpanded ? 'expanded' : ''}">&#9654;</span>
                 <span class="tree-icon">${isExpanded ? '📂' : '📁'}</span>
                 <span class="tree-name">${escapeHtml(item.name)}</span>
-                <span class="tree-meta">${countHtml}${mtimeHtml}</span>
+                <span class="tree-meta">${countHtml}${phFolderHtml}${mtimeHtml}</span>
                 <div class="tree-actions">
                     <button class="btn-secondary btn-small" onclick="treeFolderUpdate('${safePath}', event)">Update</button>
                     <button class="btn-secondary btn-small" onclick="treeFolderStatus('${safePath}', event)">Status</button>
@@ -2863,12 +2964,18 @@ function renderTreeChildren(parentPath, depth) {
                 html += renderTreeChildren(item.path, depth + 1);
             }
         } else {
+            const isPlaceholder = state.placeholderEnabled && item.size === 0;
             const sizeHtml = item.size != null ? `<span class="tree-meta-size">${formatFileSize(item.size)}</span>` : '';
+            const phBadge = state.placeholderEnabled ? (isPlaceholder ? '<span class="file-badge badge-placeholder" style="font-size:10px;padding:2px 5px;margin-right:4px;">P</span>' : '<span style="color:#42a5f5;margin-right:4px;">🔵</span>') : '';
+            const phAction = state.placeholderEnabled ? (isPlaceholder ?
+                `<button class="btn-secondary btn-small" onclick="downloadPlaceholderTree('${safePath}', event)">${t('placeholder.download')}</button>` :
+                `<button class="btn-secondary btn-small" onclick="truncatePlaceholderTree('${safePath}', event)">${t('placeholder.truncate')}</button>`) : '';
             html += `<div class="tree-node tree-node-file" data-path="${safePath}" style="padding-left: ${indent}px">
                 <span class="tree-toggle"></span>
                 <span class="tree-icon">📄</span>
-                <span class="tree-name file">${escapeHtml(item.name)}</span>
+                ${phBadge}<span class="tree-name file">${escapeHtml(item.name)}</span>
                 <span class="tree-meta">${sizeHtml}${mtimeHtml}</span>
+                <div class="tree-actions">${phAction}</div>
             </div>`;
         }
     }
