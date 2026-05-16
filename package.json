@@ -39,10 +39,11 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "darkModeSupport": true,
-      "minimumSystemVersion": "12.0"
+      "minimumSystemVersion": "12.0",
+      "afterSign": "scripts/notarize.js"
     },
     "win": {
-      "icon": "Assets/icon.png",
+      "icon": "Assets/icon.ico",
       "target": [
         {
           "target": "nsis",
@@ -57,9 +58,9 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "installerIcon": "Assets/icon.png",
-      "uninstallerIcon": "Assets/icon.png",
-      "installerHeaderIcon": "Assets/icon.png"
+      "installerIcon": "Assets/icon.ico",
+      "uninstallerIcon": "Assets/icon.ico",
+      "installerHeaderIcon": "Assets/icon.ico"
     },
     "portable": {
       "artifactName": "${productName}-${version}-portable.exe"
@@ -83,7 +84,6 @@
         "height": 380
       }
     },
-    "afterSign": "scripts/notarize.js",
     "files": [
       "main.js",
       "preload.js",
