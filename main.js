@@ -713,3 +713,205 @@ ipcMain.handle('run-svn', (event, command, cwd, repoUrl) => {
         });
     });
 });
+
+// --- Placeholder Management ---
+
+ipcMain.handle('placeholder:scan', async (event, dirPath) => {
+    if (!dirPath || !fs.existsSync(dirPath)) {
+        return { success: false, error: 'Directory not found' };
+    }
+
+    const EXCLUDED_DIRS = new Set(['.svn', 'node_modules', '.git', '.hg', '__pycache__', '.DS_Store']);
+    const files = [];
+    let totalFiles = 0;
+    let placeholders = 0;
+    let realFiles = 0;
+    let savedBytes = 0;
+
+    function walk(dir) {
+        let entries;
+        try {
+            entries = fs.readdirSync(dir, { withFileTypes: true });
+        } catch (e) {
+            return;
+        }
+        for (const entry of entries) {
+            if (EXCLUDED_DIRS.has(entry.name)) continue;
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+                walk(full);
+            } else if (entry.isFile()) {
+                try {
+                    const st = fs.statSync(full);
+                    const relPath = path.relative(dirPath, full);
+                    const isPlaceholder = st.size === 0;
+                    files.push({ relPath, size: st.size, isPlaceholder });
+                    totalFiles++;
+                    if (isPlaceholder) {
+                        placeholders++;
+                    } else {
+                        realFiles++;
+                        savedBytes += st.size;
+                    }
+                } catch (e) { /* skip unreadable */ }
+            }
+        }
+    }
+
+    walk(dirPath);
+    return { success: true, totalFiles, placeholders, realFiles, savedBytes, files };
+});
+
+ipcMain.handle('placeholder:download', async (event, { wcRoot, files, remoteUrl }) => {
+    let baseUrl = remoteUrl || '';
+
+    if (!baseUrl && wcRoot) {
+        try {
+            const result = await new Promise((resolve) => {
+                const proc = spawn('svn', ['info', wcRoot]);
+                let out = '';
+                proc.stdout.on('data', d => out += d.toString());
+                proc.on('close', () => resolve(out));
+                proc.on('error', () => resolve(''));
+            });
+            const match = result.match(/^URL:\s*(.+)$/m);
+            if (match) baseUrl = match[1].trim();
+        } catch (e) { /* fall through */ }
+    }
+
+    if (!baseUrl) {
+        return { success: 0, failed: files.length, error: 'Could not resolve remote URL' };
+    }
+
+    let success = 0;
+    let failed = 0;
+
+    for (let i = 0; i < files.length; i++) {
+        const relPath = files[i];
+        const localPath = path.join(wcRoot, relPath);
+        const fileUrl = baseUrl.replace(/\/+$/, '') + '/' + relPath.replace(/\\/g, '/');
+
+        event.sender.send('placeholder:progress', { current: i + 1, total: files.length, file: relPath });
+
+        try {
+            await new Promise((resolve, reject) => {
+                const dir = path.dirname(localPath);
+                if (!fs.existsSync(dir)) {
+                    fs.mkdirSync(dir, { recursive: true });
+                }
+                const proc = spawn('svn', ['export', '--force', fileUrl, localPath, '--non-interactive', '--trust-server-cert']);
+                let stderr = '';
+                proc.stderr.on('data', d => stderr += d.toString());
+                proc.on('close', (code) => {
+                    if (code === 0) resolve();
+                    else reject(new Error(stderr));
+                });
+                proc.on('error', reject);
+            });
+            success++;
+        } catch (e) {
+            failed++;
+        }
+    }
+
+    return { success, failed };
+});
+
+ipcMain.handle('placeholder:truncate', async (event, { files }) => {
+    let success = 0;
+    let failed = 0;
+
+    for (const absPath of files) {
+        if (!isPathWithinProjects(absPath)) {
+            failed++;
+            continue;
+        }
+        try {
+            fs.truncateSync(absPath, 0);
+            success++;
+        } catch (e) {
+            failed++;
+        }
+    }
+
+    return { success, failed };
+});
+
+ipcMain.handle('placeholder:syncStructure', async (event, { remoteUrl, localDir }) => {
+    if (!remoteUrl || !localDir) {
+        return { success: false, error: 'Missing remoteUrl or localDir' };
+    }
+
+    try {
+        const listOutput = await new Promise((resolve, reject) => {
+            const proc = spawn('svn', ['list', '-R', remoteUrl, '--non-interactive', '--trust-server-cert']);
+            let out = '';
+            let err = '';
+            proc.stdout.on('data', d => out += d.toString());
+            proc.stderr.on('data', d => err += d.toString());
+            proc.on('close', (code) => {
+                if (code === 0) resolve(out);
+                else reject(new Error(err));
+            });
+            proc.on('error', reject);
+        });
+
+        const remoteEntries = listOutput.split('\n').filter(l => l.trim());
+        const remoteSet = new Set(remoteEntries);
+
+        let dirsCreated = 0;
+        let filesCreated = 0;
+        let deleted = 0;
+
+        for (const entry of remoteEntries) {
+            const localPath = path.join(localDir, entry);
+            if (entry.endsWith('/')) {
+                if (!fs.existsSync(localPath)) {
+                    fs.mkdirSync(localPath, { recursive: true });
+                    dirsCreated++;
+                }
+            } else {
+                const dir = path.dirname(localPath);
+                if (!fs.existsSync(dir)) {
+                    fs.mkdirSync(dir, { recursive: true });
+                }
+                if (!fs.existsSync(localPath)) {
+                    fs.writeFileSync(localPath, '');
+                    filesCreated++;
+                }
+            }
+        }
+
+        const EXCLUDED_DIRS = new Set(['.svn', 'node_modules', '.git']);
+        function cleanLocal(dir, relPrefix) {
+            let entries;
+            try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+            for (const entry of entries) {
+                if (EXCLUDED_DIRS.has(entry.name)) continue;
+                const rel = relPrefix ? relPrefix + '/' + entry.name : entry.name;
+                const full = path.join(dir, entry.name);
+                if (entry.isDirectory()) {
+                    cleanLocal(full, rel);
+                    if (!remoteSet.has(rel + '/')) {
+                        try {
+                            const remaining = fs.readdirSync(full);
+                            if (remaining.length === 0) {
+                                fs.rmdirSync(full);
+                                deleted++;
+                            }
+                        } catch (e) { /* skip */ }
+                    }
+                } else if (entry.isFile()) {
+                    if (!remoteSet.has(rel)) {
+                        try { fs.unlinkSync(full); deleted++; } catch (e) { /* skip */ }
+                    }
+                }
+            }
+        }
+        cleanLocal(localDir, '');
+
+        return { success: true, dirsCreated, filesCreated, deleted };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+});

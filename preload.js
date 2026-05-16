@@ -57,4 +57,11 @@ contextBridge.exposeInMainWorld('api', {
         ipcRenderer.on('open-with-args', (_event, args) => callback(args));
     },
     rendererReady: () => ipcRenderer.invoke('renderer-ready'),
+
+    // Placeholder management
+    placeholderScan: (dirPath) => ipcRenderer.invoke('placeholder:scan', dirPath),
+    placeholderDownload: (opts) => ipcRenderer.invoke('placeholder:download', opts),
+    placeholderTruncate: (opts) => ipcRenderer.invoke('placeholder:truncate', opts),
+    placeholderSyncStructure: (opts) => ipcRenderer.invoke('placeholder:syncStructure', opts),
+    onPlaceholderProgress: (callback) => ipcRenderer.on('placeholder:progress', (_event, payload) => callback(payload)),
 });
