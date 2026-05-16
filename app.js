@@ -1559,11 +1559,20 @@ async function downloadPlaceholderTree(filePath, event) {
     hideOperation();
     if (result.success) {
         logToConsole(`Downloaded: ${parentRelPath}`, 'success');
+        const grandParent = parentDir.substring(0, parentDir.lastIndexOf('/'));
+        const gpItems = state.treeData[grandParent];
+        if (gpItems) {
+            const entry = gpItems.find(i => i.path === parentDir);
+            if (entry) entry.remote = false;
+        }
     } else {
         logToConsole(`Failed to download: ${result.error}`, 'error');
     }
     const refreshed = await window.api.listDirectory(parentDir);
-    if (refreshed.success) state.treeData[parentDir] = refreshed.items;
+    if (refreshed.success) {
+        state.treeData[parentDir] = mergeTreeWithRemote(refreshed.items, parentDir);
+        state.treeExpanded.add(parentDir);
+    }
     render();
 }
 
@@ -1608,11 +1617,20 @@ async function downloadFolderPlaceholders(folderPath, event) {
     hideOperation();
     if (result.success) {
         logToConsole(`Folder downloaded: ${folderRelPath}`, 'success');
+        const parentPath = folderPath.substring(0, folderPath.lastIndexOf('/'));
+        const parentItems = state.treeData[parentPath];
+        if (parentItems) {
+            const entry = parentItems.find(i => i.path === folderPath);
+            if (entry) entry.remote = false;
+        }
     } else {
         logToConsole(`Folder download failed: ${result.error}`, 'error');
     }
     const refreshed = await window.api.listDirectory(folderPath);
-    if (refreshed.success) state.treeData[folderPath] = refreshed.items;
+    if (refreshed.success) {
+        state.treeData[folderPath] = mergeTreeWithRemote(refreshed.items, folderPath);
+        state.treeExpanded.add(folderPath);
+    }
     render();
 }
 
@@ -1631,11 +1649,18 @@ async function truncateFolderFiles(folderPath, event) {
     hideOperation();
     if (result.success) {
         logToConsole(`Folder truncated (sparse): ${folderRelPath}`, 'success');
+        const parentPath = folderPath.substring(0, folderPath.lastIndexOf('/'));
+        const parentItems = state.treeData[parentPath];
+        if (parentItems) {
+            const entry = parentItems.find(i => i.path === folderPath);
+            if (entry) entry.remote = true;
+        }
     } else {
         logToConsole(`Folder truncate failed: ${result.error}`, 'error');
     }
     const refreshed = await window.api.listDirectory(folderPath);
     if (refreshed.success) state.treeData[folderPath] = refreshed.items;
+    else state.treeData[folderPath] = [];
     render();
 }
 
