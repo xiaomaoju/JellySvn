@@ -1,62 +1,50 @@
-# JellySvn (SVN Antigravity)
+# JellySvn
 
 > Forked from [moonlightlakesubp/JellySvn](https://github.com/moonlightlakesubp/JellySvn)
 
-Premium SVN GUI Client built with Electron. Glassmorphism dark-mode UI, multi-language support (EN/KO/ZH-CN), and comprehensive SVN operations.
+[English](docs/README_EN.md) | 中文
 
-## Recent Changes — SVN Sparse Checkout
+基于 Electron 的 SVN 图形化客户端。
 
-Replaced the legacy placeholder (0-byte file) system with native SVN sparse checkout, delivering a cleaner and faster workflow.
+## 功能
 
-### What Changed
+- **状态管理** — 查看文件状态，支持批量 Add / Revert / Delete / Ignore
+- **提交 & 更新** — 选择文件提交，支持全部更新或按文件更新
+- **日志查看** — 按关键词、作者、日期筛选提交历史，支持版本对比
+- **目录树** — 可视化项目结构，支持 SVN Sparse Checkout 按需下载
+- **冲突解决** — Mine / Theirs / Revert 一键操作
+- **分支管理** — 创建分支/标签，切换分支
+- **锁定管理** — 锁定/解锁文件，查看锁定状态
+- **Blame 视图** — 逐行显示作者和修订号
+- **合并操作** — 支持 dry-run 预览和 reintegrate 合并
+- **Diff 查看** — 内联 / 并排对比模式，支持外部 Diff 工具
+- **SVN 属性** — proplist / propget / propset / propdel
+- **Externals** — 查看/添加/编辑/删除 svn:externals
+- **Sparse Checkout** — 轻量检出，按需下载文件夹，一键清理恢复
+- **Patch** — 生成和应用 unified diff 补丁
+- **搜索** — 文件名和文件内容搜索
+- **拖放操作** — 外部文件拖入添加，Tree 视图内拖动移动
+- **多语言** — 中文 / English / 한국어
+- **暗色主题** — Dark / Midnight Blue / Forest Green
 
-**Sparse Checkout replaces Placeholders**
-- Checkout with `--depth empty` creates a lightweight working copy
-- Download folders/files on demand with `--set-depth infinity --parents`
-- "Clean" button on downloaded folders reverts them to sparse (`--set-depth empty`)
-- No more 0-byte placeholder files cluttering the working copy
+## 安装
 
-**Tree View Optimization**
-- Entering tree view loads instantly from local cache (no server round-trip)
-- Only the "Refresh" button triggers a full `svn list -R` from the remote server
-- Remote (not-downloaded) entries shown with cloud icon and "not downloaded" label
-- Folder stats show file count and total size instead of placeholder counts
+```bash
+npm install
+npm start
+```
 
-**Default View**
-- App launches directly into Tree view (previously Status view)
-- Switching projects also navigates to Tree view automatically
+需要系统已安装 `svn` 命令行工具。
 
-**UI Cleanup**
-- Removed all "placeholder" terminology from UI, settings, and code
-- Removed placeholder toggle and remote URL fields from Settings page
-- Added "Clean" button (red accent) for truncating downloaded folders back to sparse
-- Simplified commit view — no more placeholder file exclusion logic
+## 构建
 
-### Files Modified
+```bash
+npm run build:mac   # macOS (dmg + zip)
+npm run build:win   # Windows (安装包 + 便携版)
+```
 
-| File | Changes |
-|------|---------|
-| `app.js` | Sparse checkout logic, tree view refactor, default view, clean button |
-| `main.js` | IPC handlers for sparse checkout, remote listing, folder operations |
-| `preload.js` | Context bridge methods for new IPC handlers |
-| `style.css` | Clean button style, removed placeholder CSS classes |
-| `i18n.js` | Sparse checkout i18n keys (EN/KO/ZH-CN), removed placeholder keys |
-| `index.html` | Updated checkout modal label |
+推送 `v*` 标签自动触发 GitHub Actions 构建并发布 Release。
 
-## Tech Stack
+## 许可证
 
-- **Runtime**: Electron 33+ (macOS, hiddenInset titlebar)
-- **Frontend**: Vanilla JS / CSS / HTML5
-- **SVN**: Native CLI wrapper (`spawn('svn', args)`)
-- **Security**: Electron safeStorage for password encryption
-- **i18n**: English, Korean, Simplified Chinese
-
-## Setup
-
-1. Install SVN CLI (`svn` must be available in PATH)
-2. `npm install`
-3. `npm start`
-
-## License
-
-See original repository for license information.
+MIT
