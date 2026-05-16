@@ -836,8 +836,20 @@ function bindEvents() {
         const msg = document.getElementById('commit-message').value;
         if (!msg) return alert('Please enter a commit message.');
         const files = Array.from(state.selectedFiles);
+        const placeholderPaths = new Set(
+            state.workingCopy.filter(f => f.status === 'placeholder').map(f => f.path)
+        );
+        const safeFiles = files.filter(f => !placeholderPaths.has(f));
+        const excluded = files.length - safeFiles.length;
+        if (excluded > 0) {
+            logToConsole(t('placeholder.excluded', { count: excluded }), 'warning');
+        }
+        if (safeFiles.length === 0) {
+            alert('No files to commit after excluding placeholders.');
+            return;
+        }
         closeModal();
-        runSvn(['commit', '-m', msg, ...files]);
+        runSvn(['commit', '-m', msg, ...safeFiles]);
     });
 
     // Checkout Modal
@@ -1867,7 +1879,7 @@ function renderCommitView() {
         return;
     }
 
-    let committable = state.workingCopy.filter(f => f.status !== 'untracked');
+    let committable = state.workingCopy.filter(f => f.status !== 'untracked' && f.status !== 'placeholder');
     let untracked = state.workingCopy.filter(f => f.status === 'untracked');
 
     let html = '<div class="commit-view-container">';
@@ -1974,7 +1986,17 @@ async function inlineCommit() {
     if (state.selectedFiles.size === 0) return alert('Please select files to commit.');
 
     const files = Array.from(state.selectedFiles);
-    const success = await runSvn(['commit', '-m', msg, ...files]);
+    // Exclude placeholder files from commit
+    const placeholderPaths = new Set(
+        state.workingCopy.filter(f => f.status === 'placeholder').map(f => f.path)
+    );
+    const safeFiles = files.filter(f => !placeholderPaths.has(f));
+    const excluded = files.length - safeFiles.length;
+    if (excluded > 0) {
+        logToConsole(t('placeholder.excluded', { count: excluded }), 'warning');
+    }
+    if (safeFiles.length === 0) return alert('No files to commit after excluding placeholders.');
+    const success = await runSvn(['commit', '-m', msg, ...safeFiles]);
     if (success) {
         state.selectedFiles.clear();
         updateBulkUI();
