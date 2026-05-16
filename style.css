@@ -469,6 +469,47 @@ body {
     color: var(--warning);
 }
 
+.badge-placeholder {
+    background: rgba(121, 134, 203, 0.2);
+    color: #7986CB;
+}
+
+.placeholder-stats-bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 20px;
+    margin-bottom: 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--glass-border);
+    border-radius: 12px;
+    font-size: 13px;
+    color: var(--text-dim);
+    backdrop-filter: blur(10px);
+}
+
+.placeholder-stats-bar .stat-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.placeholder-stats-bar .stat-separator {
+    color: var(--border-color);
+}
+
+.placeholder-folder-stats {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-left: 8px;
+}
+
+.placeholder-folder-actions {
+    display: inline-flex;
+    gap: 4px;
+    margin-left: 6px;
+}
+
 /* Bottom Panel */
 .bottom-panel {
     height: 140px;
