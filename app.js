@@ -831,6 +831,9 @@ function bindEvents() {
         openCommitModal();
     });
 
+    document.getElementById('btn-bulk-ph-download').addEventListener('click', bulkPlaceholderDownload);
+    document.getElementById('btn-bulk-ph-truncate').addEventListener('click', bulkPlaceholderTruncate);
+
     // Commit Modal
     document.getElementById('btn-confirm-commit').addEventListener('click', () => {
         const msg = document.getElementById('commit-message').value;
@@ -1252,6 +1255,28 @@ function updateBulkUI() {
     } else {
         elements.bulkActions.classList.add('hidden');
     }
+    const phDownloadBtn = document.getElementById('btn-bulk-ph-download');
+    const phTruncateBtn = document.getElementById('btn-bulk-ph-truncate');
+    if (phDownloadBtn && phTruncateBtn) {
+        if (state.placeholderEnabled && state.selectedFiles.size > 0) {
+            const selectedArr = Array.from(state.selectedFiles);
+            const hasPlaceholders = selectedArr.some(f => {
+                const file = state.workingCopy.find(wc => wc.path === f);
+                return file && file.status === 'placeholder';
+            });
+            const hasRealFiles = selectedArr.some(f => {
+                const file = state.workingCopy.find(wc => wc.path === f);
+                return file && file.status !== 'placeholder' && file.status !== 'untracked';
+            });
+            phDownloadBtn.classList.toggle('hidden', !hasPlaceholders);
+            phDownloadBtn.textContent = t('placeholder.batchDownload');
+            phTruncateBtn.classList.toggle('hidden', !hasRealFiles);
+            phTruncateBtn.textContent = t('placeholder.batchTruncate');
+        } else {
+            phDownloadBtn.classList.add('hidden');
+            phTruncateBtn.classList.add('hidden');
+        }
+    }
 }
 
 function openCommitModal() {
@@ -1446,6 +1471,50 @@ async function truncateToPlaceholder(relPath) {
     } else {
         logToConsole(`Failed to truncate: ${relPath}`, 'error');
     }
+    refreshStatus();
+}
+
+async function bulkPlaceholderDownload() {
+    const project = state.projects[state.selectedProjectIndex];
+    if (!project) return;
+    const placeholderFiles = Array.from(state.selectedFiles).filter(f => {
+        const file = state.workingCopy.find(wc => wc.path === f);
+        return file && file.status === 'placeholder';
+    });
+    if (placeholderFiles.length === 0) return;
+
+    const progressHandler = (payload) => {
+        showOperation(t('placeholder.downloading', { current: payload.current, total: payload.total }));
+    };
+    window.api.onPlaceholderProgress(progressHandler);
+
+    const result = await window.api.placeholderDownload({
+        wcRoot: project.path,
+        files: placeholderFiles,
+        remoteUrl: state.settings.placeholderRemoteUrl || ''
+    });
+    hideOperation();
+    logToConsole(`Batch download: ${result.success} succeeded, ${result.failed} failed`, result.failed > 0 ? 'warning' : 'success');
+    state.selectedFiles.clear();
+    updateBulkUI();
+    refreshStatus();
+}
+
+async function bulkPlaceholderTruncate() {
+    const project = state.projects[state.selectedProjectIndex];
+    if (!project) return;
+    const realFiles = Array.from(state.selectedFiles).filter(f => {
+        const file = state.workingCopy.find(wc => wc.path === f);
+        return file && file.status !== 'placeholder' && file.status !== 'untracked';
+    });
+    if (realFiles.length === 0) return;
+    if (!confirm(`Convert ${realFiles.length} file(s) to placeholders?`)) return;
+
+    const absPaths = realFiles.map(f => project.path + '/' + f);
+    const result = await window.api.placeholderTruncate({ files: absPaths });
+    logToConsole(`Batch truncate: ${result.success} succeeded, ${result.failed} failed`, result.failed > 0 ? 'warning' : 'success');
+    state.selectedFiles.clear();
+    updateBulkUI();
     refreshStatus();
 }
 
