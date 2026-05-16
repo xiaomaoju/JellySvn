@@ -39,8 +39,7 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "darkModeSupport": true,
-      "minimumSystemVersion": "12.0",
-      "afterSign": "scripts/notarize.js"
+      "minimumSystemVersion": "12.0"
     },
     "win": {
       "icon": "Assets/icon.ico",
