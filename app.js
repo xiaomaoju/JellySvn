@@ -106,7 +106,11 @@ const state = {
     repoBrowserLoading: new Set(),  // urls currently fetching (for spinner)
 
     // Log compare
-    logSelectedRevisions: new Set()
+    logSelectedRevisions: new Set(),
+
+    // Placeholder management
+    placeholderEnabled: false,
+    placeholderStats: null,
 };
 
 // UI Elements
@@ -139,12 +143,18 @@ async function init() {
     // reverted to CSS defaults on every launch.
     applyTheme(state.settings.theme || 'dark');
     renderSidebar();
+    localizeStaticHTML();
     bindEvents();
     bindSvnOutputStream();
     bindFileWatcher();
     bindKeyboardShortcuts();
     bindOpenWithArgs();
     await loadProjects();
+    // Re-apply translated title after projects load (HTML has English default)
+    const titleKeys = { 'status': 'view.status' };
+    if (titleKeys[state.currentView]) {
+        elements.pageTitle.textContent = t(titleKeys[state.currentView]);
+    }
 
     // Add scroll shadow indicator to nav-menu
     const navMenu = document.querySelector('.nav-menu');
@@ -164,6 +174,66 @@ async function init() {
 
     // Signal init complete — process any queued open-with-args
     onInitComplete();
+}
+
+// === Localize static HTML elements (modals, labels) ===
+function localizeStaticHTML() {
+    const map = {
+        '#modal-title': 'modal.commitChanges',
+        '#btn-confirm-commit': 'btn.confirmCommit',
+        '#commit-message': { attr: 'placeholder', key: 'modal.enterCommitMessage' },
+        '#checkout-modal .modal-header h2': 'modal.svnCheckout',
+        '#btn-confirm-checkout': 'nav.checkout',
+        '#auth-modal .modal-header h2': 'modal.svnAuth',
+        '#auth-modal .modal-info': 'modal.credentialsRequired',
+        '#btn-save-auth': 'btn.saveCredentials',
+        '#diff-modal-title': 'modal.diffViewer',
+        '#btn-refresh': 'btn.refresh',
+        '#current-repo': 'msg.notConnected',
+        '#operation-label': 'op.processing',
+    };
+    for (const [sel, val] of Object.entries(map)) {
+        const el = document.querySelector(sel);
+        if (!el) continue;
+        if (typeof val === 'object') {
+            el.setAttribute(val.attr, t(val.key));
+        } else {
+            el.textContent = t(val);
+        }
+    }
+    // Checkout modal labels
+    const checkoutLabels = document.querySelectorAll('#checkout-modal .input-group label');
+    if (checkoutLabels[0]) checkoutLabels[0].textContent = t('modal.repoUrl');
+    if (checkoutLabels[1]) checkoutLabels[1].textContent = t('modal.localPath');
+    // Auth modal labels
+    const authLabels = document.querySelectorAll('#auth-modal .input-group label');
+    if (authLabels[0]) authLabels[0].textContent = t('modal.repoOrGlobal');
+    if (authLabels[1]) authLabels[1].textContent = t('modal.username');
+    if (authLabels[2]) authLabels[2].textContent = t('modal.password');
+    // Diff legend
+    const legends = document.querySelectorAll('.diff-legend .legend-item');
+    if (legends[0]) legends[0].textContent = t('modal.added');
+    if (legends[1]) legends[1].textContent = t('modal.removed');
+    if (legends[2]) legends[2].textContent = t('modal.changed');
+    // Diff mode buttons
+    const diffBtns = document.querySelectorAll('.diff-mode-toggle button');
+    if (diffBtns[0]) diffBtns[0].textContent = t('modal.inline');
+    if (diffBtns[1]) diffBtns[1].textContent = t('modal.sideBySide');
+    // Modal cancel/close buttons
+    document.querySelectorAll('.close-modal').forEach(btn => {
+        if (btn.textContent.trim() === 'Cancel' || btn.textContent.trim() === '취소') {
+            btn.textContent = t('btn.cancel');
+        }
+    });
+    // Checkout modal footer buttons
+    const checkoutFooterBtns = document.querySelectorAll('#checkout-modal .modal-footer button');
+    if (checkoutFooterBtns[0]) checkoutFooterBtns[0].textContent = t('welcome.openExisting');
+    // Browse button
+    const btnBrowseLocal = document.getElementById('btn-browse-local');
+    if (btnBrowseLocal) btnBrowseLocal.textContent = t('btn.browse');
+    // Copy button in diff
+    const copyBtn = document.querySelector('.diff-toolbar-right .btn-secondary');
+    if (copyBtn && copyBtn.textContent.trim() === 'Copy') copyBtn.textContent = t('btn.copy');
 }
 
 // === Dynamic Sidebar Rendering ===
@@ -225,6 +295,14 @@ function renderSidebar() {
 
     elements.navMenu.innerHTML = html;
     bindNavEvents();
+
+    // Update static HTML elements that live outside the dynamic sidebar
+    const repoLabel = document.querySelector('.repo-info h3');
+    if (repoLabel) repoLabel.textContent = t('msg.repository');
+    const btnBrowse = document.getElementById('btn-browse');
+    if (btnBrowse) btnBrowse.textContent = t('btn.changeRepo');
+    const consoleSpan = document.querySelector('#panel-header-toggle > span');
+    if (consoleSpan) consoleSpan.innerHTML = `${t('msg.consoleOutput')} <span id="console-toggle-icon">▼</span>`;
 }
 
 function bindNavEvents() {
@@ -248,6 +326,7 @@ async function loadSettings() {
             state.settings = { ...state.settings, ...saved };
             state.logLimit = state.settings.logLimit || 20;
         }
+        state.placeholderEnabled = !!state.settings.placeholderEnabled;
     } catch (err) {
         // Use defaults
     }
@@ -1267,19 +1346,19 @@ function renderStatus() {
                 </div>
                 <div class="file-actions" onclick="event.stopPropagation()">
                     ${file.status === 'untracked' ?
-                `<button class="btn-primary" onclick="runSvn(['add', '${ep}'])">Add</button>
-                         <button class="btn-secondary" onclick="quickAddIgnoreFromStatus('${ep}')">Ignore</button>
-                         <button class="btn-secondary" onclick="if(confirm('Delete ${ep}?')) deleteFile('${ep}')">Delete</button>` :
+                `<button class="btn-primary" onclick="runSvn(['add', '${ep}'])">${t('btn.add')}</button>
+                         <button class="btn-secondary" onclick="quickAddIgnoreFromStatus('${ep}')">${t('btn.ignore')}</button>
+                         <button class="btn-secondary" onclick="if(confirm('${t('msg.confirmDelete')} ${ep}?')) deleteFile('${ep}')">${t('btn.delete')}</button>` :
                 file.status === 'missing' ?
-                `<button class="btn-secondary" onclick="runSvn(['delete', '${ep}'])">Remove</button>
-                         <button class="btn-secondary" onclick="if(confirm('Revert ${ep}?')) runSvn(['revert', '-R', '${ep}'])">Revert</button>` :
+                `<button class="btn-secondary" onclick="runSvn(['delete', '${ep}'])">${t('btn.remove')}</button>
+                         <button class="btn-secondary" onclick="if(confirm('${t('msg.confirmRevert')} ${ep}?')) runSvn(['revert', '-R', '${ep}'])">${t('btn.revert')}</button>` :
                 file.status === 'conflict' ?
-                `<button class="btn-secondary" onclick="showDiff('${ep}')">Diff</button>
-                         <button class="btn-primary" onclick="runSvn(['resolve', '--accept', 'working', '${ep}'])">Resolve (mine)</button>
-                         <button class="btn-secondary" onclick="runSvn(['resolve', '--accept', 'theirs-full', '${ep}'])">Resolve (theirs)</button>
-                         <button class="btn-secondary" onclick="if(confirm('Revert ${ep}?')) runSvn(['revert', '-R', '${ep}'])">Revert</button>` :
-                `<button class="btn-secondary" onclick="showDiff('${ep}')">Diff</button>
-                         <button class="btn-secondary" onclick="if(confirm('Revert ${ep}?')) runSvn(['revert', '-R', '${ep}'])">Revert</button>`
+                `<button class="btn-secondary" onclick="showDiff('${ep}')">${t('btn.diff')}</button>
+                         <button class="btn-primary" onclick="runSvn(['resolve', '--accept', 'working', '${ep}'])">${t('btn.resolveMine')}</button>
+                         <button class="btn-secondary" onclick="runSvn(['resolve', '--accept', 'theirs-full', '${ep}'])">${t('btn.resolveTheirs')}</button>
+                         <button class="btn-secondary" onclick="if(confirm('${t('msg.confirmRevert')} ${ep}?')) runSvn(['revert', '-R', '${ep}'])">${t('btn.revert')}</button>` :
+                `<button class="btn-secondary" onclick="showDiff('${ep}')">${t('btn.diff')}</button>
+                         <button class="btn-secondary" onclick="if(confirm('${t('msg.confirmRevert')} ${ep}?')) runSvn(['revert', '-R', '${ep}'])">${t('btn.revert')}</button>`
             }
                 </div>
             </div>
@@ -1292,7 +1371,7 @@ function renderStatus() {
     if (untrackedFiles.length > 0) {
         html += `<div class="commit-form" style="margin-top: 12px;">
             <div class="commit-form-actions">
-                <button class="btn-primary" onclick="addAllUntracked()">Add All Untracked (${untrackedFiles.length})</button>
+                <button class="btn-primary" onclick="addAllUntracked()">${t('btn.add')} (${untrackedFiles.length})</button>
             </div>
         </div>`;
     }
@@ -1738,8 +1817,8 @@ function renderCommitView() {
     // Filter bar
     html += `<div class="log-filter-bar" style="margin-bottom: 12px;">
         <div class="log-filter-row">
-            <input type="text" id="commit-filter-input" class="log-filter-input" placeholder="Filter files by name or path..." value="${escapeHtml(state.commitFilter || '')}" oninput="onCommitFilterChange()">
-            <button class="btn-secondary btn-small" onclick="clearCommitFilter()" ${state.commitFilter ? '' : 'disabled'}>Clear</button>
+            <input type="text" id="commit-filter-input" class="log-filter-input" placeholder="${t('search.placeholder')}" value="${escapeHtml(state.commitFilter || '')}" oninput="onCommitFilterChange()">
+            <button class="btn-secondary btn-small" onclick="clearCommitFilter()" ${state.commitFilter ? '' : 'disabled'}>${t('btn.clear')}</button>
         </div>
     </div>`;
 
@@ -1751,8 +1830,8 @@ function renderCommitView() {
     }
 
     if (untracked.length > 0) {
-        html += `<div class="section-label">Untracked Files (must 'Add' before committing)
-            <button class="btn-primary btn-small" style="margin-left: 12px;" onclick="addAllUntracked()">Add All (${untracked.length})</button>
+        html += `<div class="section-label">${t('label.untrackedFiles')}
+            <button class="btn-primary btn-small" style="margin-left: 12px;" onclick="addAllUntracked()">${t('btn.add')} (${untracked.length})</button>
         </div>`;
         html += '<div class="status-list">';
         untracked.forEach(file => {
@@ -1764,7 +1843,7 @@ function renderCommitView() {
                         <span class="file-path">${escapeHtml(file.path)}</span>
                     </div>
                     <div class="file-actions">
-                        <button class="btn-primary" onclick="runSvn(['add', '${ep}'])">Add</button>
+                        <button class="btn-primary" onclick="runSvn(['add', '${ep}'])">${t('btn.add')}</button>
                     </div>
                 </div>`;
         });
@@ -1772,7 +1851,7 @@ function renderCommitView() {
     }
 
     if (committable.length > 0) {
-        html += `<div class="section-label">Committable Files${filterText ? ` (filtered: ${committable.length})` : ''}</div>`;
+        html += `<div class="section-label">${t('label.committableFiles')}${filterText ? ` (${committable.length})` : ''}</div>`;
         html += '<div class="status-list">';
         committable.forEach((file, index) => {
             const ep = escapePath(file.path);
@@ -1788,7 +1867,7 @@ function renderCommitView() {
                         <span class="file-path">${escapeHtml(file.path)}</span>
                     </div>
                     <div class="file-actions" onclick="event.stopPropagation()">
-                        <button class="btn-secondary" onclick="showDiff('${ep}')">Diff</button>
+                        <button class="btn-secondary" onclick="showDiff('${ep}')">${t('btn.diff')}</button>
                     </div>
                 </div>`;
         });
@@ -1799,7 +1878,7 @@ function renderCommitView() {
         let clOptions = '';
         if (clNames.length > 0) {
             clOptions = `<div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px;">
-                <span style="color: var(--text-dim); font-size: 13px;">Commit changelist:</span>
+                <span style="color: var(--text-dim); font-size: 13px;">${t('label.commitChangelist')}</span>
                 ${clNames.map(cl => `<button class="btn-secondary btn-small" onclick="commitChangelist('${escapeHtml(cl)}')">${escapeHtml(cl)} (${state.changelists[cl].length})</button>`).join('')}
             </div>`;
         }
@@ -1807,10 +1886,10 @@ function renderCommitView() {
         html += `
             <div class="commit-form">
                 ${clOptions}
-                <textarea id="inline-commit-message" class="commit-textarea" placeholder="Enter commit message..."></textarea>
+                <textarea id="inline-commit-message" class="commit-textarea" placeholder="${t('modal.enterCommitMessage')}"></textarea>
                 <div class="commit-form-actions">
-                    <button class="btn-secondary" onclick="selectAllCommittable()">Select All</button>
-                    <button class="btn-primary" onclick="inlineCommit()">Commit Selected (${state.selectedFiles.size})</button>
+                    <button class="btn-secondary" onclick="selectAllCommittable()">${t('btn.selectAll')}</button>
+                    <button class="btn-primary" onclick="inlineCommit()">${t('btn.commitSelected')} (${state.selectedFiles.size})</button>
                 </div>
             </div>`;
     }
@@ -1873,7 +1952,7 @@ function renderRevertView() {
                         <span class="file-path">${escapeHtml(file.path)}</span>
                     </div>
                     <div class="file-actions" onclick="event.stopPropagation()">
-                        <button class="btn-secondary" onclick="showDiff('${ep}')">Diff</button>
+                        <button class="btn-secondary" onclick="showDiff('${ep}')">${t('btn.diff')}</button>
                         <button class="btn-secondary" style="color: var(--error);" onclick="if(confirm('Revert ${ep}?')) runSvn(['revert', '-R', '${ep}'])">Revert</button>
                     </div>
                 </div>`;
@@ -3394,6 +3473,7 @@ function renderSettings() {
             <select id="settings-language" class="settings-input" onchange="onLanguageChange()">
                 <option value="en" ${getCurrentLanguage() === 'en' ? 'selected' : ''}>English</option>
                 <option value="ko" ${getCurrentLanguage() === 'ko' ? 'selected' : ''}>한국어</option>
+                <option value="zh-CN" ${getCurrentLanguage() === 'zh-CN' ? 'selected' : ''}>简体中文</option>
             </select>
         </div>
         <div class="settings-row">
@@ -3437,6 +3517,28 @@ function renderSettings() {
                 <span class="settings-desc">${state.watcherActive ? t('settings.watcherActive') : t('settings.watcherInactive')}</span>
             </div>
             <span class="settings-status-badge ${state.watcherActive ? 'active' : ''}">${state.watcherActive ? t('settings.watcherActive') : t('settings.watcherInactive')}</span>
+        </div>
+    </div>`;
+
+    // Placeholder
+    html += `<div class="section-label">${t('placeholder.enabled')}</div>
+    <div class="settings-card">
+        <div class="settings-row">
+            <div class="settings-info">
+                <span class="settings-title">${t('placeholder.enabled')}</span>
+                <span class="settings-desc">${t('placeholder.enabledDesc')}</span>
+            </div>
+            <label class="toggle-switch">
+                <input type="checkbox" id="settings-placeholder-enabled" ${state.placeholderEnabled ? 'checked' : ''} onchange="onPlaceholderToggle()">
+                <span class="toggle-slider"></span>
+            </label>
+        </div>
+        <div class="settings-row">
+            <div class="settings-info">
+                <span class="settings-title">${t('placeholder.remoteUrl')}</span>
+                <span class="settings-desc">${t('placeholder.remoteUrlDesc')}</span>
+            </div>
+            <input type="text" id="settings-placeholder-url" class="settings-input" style="width: 320px;" placeholder="https://svn.example.com/repo/trunk" value="${escapeHtml(state.settings.placeholderRemoteUrl || '')}" onchange="onPlaceholderUrlChange()">
         </div>
     </div>`;
 
@@ -3509,6 +3611,34 @@ function onAutoRefreshToggle() {
     }
     // Re-render to update status badge
     setTimeout(() => render(), 300);
+}
+
+function onPlaceholderToggle() {
+    const checkbox = document.getElementById('settings-placeholder-enabled');
+    state.placeholderEnabled = checkbox.checked;
+    state.settings.placeholderEnabled = checkbox.checked;
+    saveSettings();
+    if (state.placeholderEnabled && state.selectedProjectIndex >= 0) {
+        runPlaceholderScan();
+    } else {
+        state.placeholderStats = null;
+    }
+    render();
+}
+
+function onPlaceholderUrlChange() {
+    const input = document.getElementById('settings-placeholder-url');
+    state.settings.placeholderRemoteUrl = input ? input.value.trim() : '';
+    saveSettings();
+}
+
+async function runPlaceholderScan() {
+    const project = state.projects[state.selectedProjectIndex];
+    if (!project) return;
+    const result = await window.api.placeholderScan(project.path);
+    if (result.success) {
+        state.placeholderStats = result;
+    }
 }
 
 function applyTheme(theme) {
