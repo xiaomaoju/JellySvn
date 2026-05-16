@@ -63,7 +63,8 @@
                 </div>
             </section>
 
-            <footer class="bottom-panel">
+            <footer class="bottom-panel" id="bottom-panel">
+                <div class="panel-resize-handle" id="panel-resize-handle"></div>
                 <div class="panel-header" id="panel-header-toggle" style="cursor: pointer;">
                     <span>Console Output <span id="console-toggle-icon">▼</span></span>
                     <button class="btn-icon" id="btn-clear-console">×</button>
@@ -113,6 +114,10 @@
                         <input type="text" id="checkout-path" placeholder="/path/to/local/dir">
                         <button class="btn-secondary" id="btn-browse-local">Browse</button>
                     </div>
+                </div>
+                <div class="input-group" style="flex-direction:row; align-items:center; gap:8px;">
+                    <input type="checkbox" id="checkout-placeholder" style="width:18px;height:18px;accent-color:#7c4dff;cursor:pointer;">
+                    <label for="checkout-placeholder" id="checkout-placeholder-label" style="cursor:pointer; margin:0; font-size:13px; color:rgba(255,255,255,0.7);">Checkout as placeholders (0-byte files only)</label>
                 </div>
             </div>
             <div class="modal-footer">

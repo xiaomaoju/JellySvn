@@ -48,6 +48,9 @@ contextBridge.exposeInMainWorld('api', {
         }
     },
 
+    // Reveal in file manager (Finder / Explorer)
+    revealInFileManager: (filePath) => ipcRenderer.invoke('reveal-in-file-manager', filePath),
+
     // External diff tool
     openExternalDiff: (options) => ipcRenderer.invoke('open-external-diff', options),
 
@@ -63,6 +66,11 @@ contextBridge.exposeInMainWorld('api', {
     placeholderDownload: (opts) => ipcRenderer.invoke('placeholder:download', opts),
     placeholderTruncate: (opts) => ipcRenderer.invoke('placeholder:truncate', opts),
     placeholderSyncStructure: (opts) => ipcRenderer.invoke('placeholder:syncStructure', opts),
+    placeholderCheckout: (opts) => ipcRenderer.invoke('placeholder:checkoutAsPlaceholder', opts),
+    placeholderGetRemoteListing: (dir) => ipcRenderer.invoke('placeholder:getRemoteListing', dir),
+    placeholderRefreshRemoteListing: (dir) => ipcRenderer.invoke('placeholder:refreshRemoteListing', dir),
+    placeholderDownloadFolder: (opts) => ipcRenderer.invoke('placeholder:downloadFolder', opts),
+    placeholderTruncateFolder: (opts) => ipcRenderer.invoke('placeholder:truncateFolder', opts),
     onPlaceholderProgress: (callback) => {
         ipcRenderer.removeAllListeners('placeholder:progress');
         ipcRenderer.on('placeholder:progress', (_event, payload) => callback(payload));

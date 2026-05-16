@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, safeStorage, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
@@ -328,10 +328,23 @@ ipcMain.handle('browse-folder', async () => {
     return { path: result.filePaths[0] };
 });
 
+function findSvnRoot(startPath) {
+    let dir = path.resolve(startPath);
+    const root = path.parse(dir).root;
+    while (dir !== root) {
+        const svnDir = path.join(dir, '.svn');
+        if (fs.existsSync(svnDir) && fs.statSync(svnDir).isDirectory()) {
+            return dir;
+        }
+        dir = path.dirname(dir);
+    }
+    return null;
+}
+
 // Validate SVN repo
 ipcMain.handle('validate-repo', (event, repoPath) => {
-    const svnDir = path.join(repoPath, '.svn');
-    return { isValid: fs.existsSync(svnDir) && fs.statSync(svnDir).isDirectory() };
+    const svnRoot = findSvnRoot(repoPath);
+    return { isValid: !!svnRoot, svnRoot: svnRoot || null };
 });
 
 // Delete file (restricted to paths inside a known project working copy)
@@ -351,6 +364,10 @@ ipcMain.handle('delete-file', (event, filePath, cwd) => {
     } catch (e) {
         return { success: false, error: e.message };
     }
+});
+
+ipcMain.handle('reveal-in-file-manager', (event, filePath) => {
+    shell.showItemInFolder(path.resolve(filePath));
 });
 
 // List directory contents (with size + mtime for tree view)
@@ -647,7 +664,13 @@ ipcMain.handle('run-svn', (event, command, cwd, repoUrl) => {
         }
 
         // checkout doesn't need cwd - use undefined
-        const spawnCwd = command[0] === 'checkout' ? undefined : (cwd || undefined);
+        // For non-checkout commands, if cwd has no .svn, walk up to find svn root
+        let effectiveCwd = cwd || undefined;
+        if (command[0] !== 'checkout' && effectiveCwd) {
+            const svnRoot = findSvnRoot(effectiveCwd);
+            if (svnRoot) effectiveCwd = svnRoot;
+        }
+        const spawnCwd = command[0] === 'checkout' ? undefined : effectiveCwd;
 
         const proc = spawn('svn', args, {
             cwd: spawnCwd,
@@ -769,22 +792,45 @@ ipcMain.handle('placeholder:download', async (event, { wcRoot, files, remoteUrl 
     }
 
     if (!baseUrl && wcRoot) {
+        const svnRoot = findSvnRoot(wcRoot);
+        const infoTarget = svnRoot || wcRoot;
         try {
             const result = await new Promise((resolve) => {
-                const proc = spawn('svn', ['info', wcRoot]);
+                const proc = spawn('svn', ['info', infoTarget]);
                 let out = '';
                 proc.stdout.on('data', d => out += d.toString());
                 proc.on('close', () => resolve(out));
                 proc.on('error', () => resolve(''));
             });
             const match = result.match(/^URL:\s*(.+)$/m);
-            if (match) baseUrl = match[1].trim();
+            if (match) {
+                const rootUrl = match[1].trim();
+                if (svnRoot && svnRoot !== path.resolve(wcRoot)) {
+                    const relFromRoot = path.relative(svnRoot, path.resolve(wcRoot)).replace(/\\/g, '/');
+                    baseUrl = rootUrl.replace(/\/+$/, '') + '/' + relFromRoot;
+                } else {
+                    baseUrl = rootUrl;
+                }
+            }
         } catch (e) { /* fall through */ }
     }
 
     if (!baseUrl) {
         return { success: 0, failed: files.length, error: 'Could not resolve remote URL' };
     }
+
+    const authData = loadAuthWithDecrypt();
+    let dlCreds = null;
+    const cleanBase = baseUrl.replace(/\/+$/, '');
+    const sortedAuthKeys = Object.keys(authData).filter(k => k !== 'global').sort((a, b) => b.length - a.length);
+    for (const key of sortedAuthKeys) {
+        const normKey = key.replace(/\/+$/, '');
+        if (cleanBase === normKey || cleanBase.startsWith(normKey + '/')) { dlCreds = authData[key]; break; }
+    }
+    if (!dlCreds && authData.global) dlCreds = authData.global;
+
+    const svnRoot = findSvnRoot(wcRoot);
+    const isWorkingCopy = !!svnRoot;
 
     let success = 0;
     let failed = 0;
@@ -798,23 +844,20 @@ ipcMain.handle('placeholder:download', async (event, { wcRoot, files, remoteUrl 
             failed++;
             continue;
         }
-        const fileUrl = baseUrl.replace(/\/+$/, '') + '/' + relPath.replace(/\\/g, '/');
 
         event.sender.send('placeholder:progress', { current: i + 1, total: files.length, file: relPath });
 
         try {
+            const dir = path.dirname(localPath);
+            if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true }); }
+            const fileUrl = baseUrl.replace(/\/+$/, '') + '/' + relPath.replace(/\\/g, '/');
+            const exportArgs = ['export', '--force', fileUrl, localPath, '--non-interactive', '--trust-server-cert'];
+            if (dlCreds) { exportArgs.push('--username', dlCreds.username, '--password', dlCreds.password); }
             await new Promise((resolve, reject) => {
-                const dir = path.dirname(localPath);
-                if (!fs.existsSync(dir)) {
-                    fs.mkdirSync(dir, { recursive: true });
-                }
-                const proc = spawn('svn', ['export', '--force', fileUrl, localPath, '--non-interactive', '--trust-server-cert']);
+                const proc = spawn('svn', exportArgs);
                 let stderr = '';
                 proc.stderr.on('data', d => stderr += d.toString());
-                proc.on('close', (code) => {
-                    if (code === 0) resolve();
-                    else reject(new Error(stderr));
-                });
+                proc.on('close', (code) => code === 0 ? resolve() : reject(new Error(stderr)));
                 proc.on('error', reject);
             });
             success++;
@@ -923,6 +966,193 @@ ipcMain.handle('placeholder:syncStructure', async (event, { remoteUrl, localDir 
         cleanLocal(localDir, '');
 
         return { success: true, dirsCreated, filesCreated, deleted };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+});
+
+ipcMain.handle('placeholder:checkoutAsPlaceholder', async (event, { remoteUrl, localDir }) => {
+    if (!remoteUrl || !localDir) {
+        return { success: false, error: 'Missing remoteUrl or localDir' };
+    }
+    try {
+        const authData = loadAuthWithDecrypt();
+        let creds = null;
+        const cleanUrl = remoteUrl.replace(/\/+$/, '');
+        const sortedKeys = Object.keys(authData).filter(k => k !== 'global').sort((a, b) => b.length - a.length);
+        for (const key of sortedKeys) {
+            const normKey = key.replace(/\/+$/, '');
+            if (cleanUrl === normKey || cleanUrl.startsWith(normKey + '/')) { creds = authData[key]; break; }
+        }
+        if (!creds && authData.global) creds = authData.global;
+
+        // Step 1: svn checkout --depth empty (only .svn metadata, no files)
+        const existingSvnRoot = findSvnRoot(localDir);
+        if (!existingSvnRoot) {
+            const coArgs = ['checkout', '--depth', 'empty', remoteUrl, localDir, '--non-interactive', '--trust-server-cert'];
+            if (creds) { coArgs.push('--username', creds.username, '--password', creds.password); }
+            await new Promise((resolve, reject) => {
+                const proc = spawn('svn', coArgs);
+                let err = '';
+                proc.stderr.on('data', d => err += d.toString());
+                proc.on('close', code => code === 0 ? resolve() : reject(new Error(err)));
+                proc.on('error', reject);
+            });
+        }
+
+        // Step 2: svn list -R to get remote structure, cache it locally
+        const listArgs = ['list', '-R', remoteUrl, '--non-interactive', '--trust-server-cert'];
+        if (creds) { listArgs.push('--username', creds.username, '--password', creds.password); }
+        const listOutput = await new Promise((resolve, reject) => {
+            const proc = spawn('svn', listArgs);
+            let out = '', err = '';
+            proc.stdout.on('data', d => out += d.toString());
+            proc.stderr.on('data', d => err += d.toString());
+            proc.on('close', code => code === 0 ? resolve(out) : reject(new Error(err)));
+            proc.on('error', reject);
+        });
+
+        const entries = listOutput.split('\n').filter(l => l.trim());
+        // Save remote listing cache for tree view
+        const cacheFile = path.join(localDir, '.svn', 'jelly-remote-listing.json');
+        fs.writeFileSync(cacheFile, JSON.stringify(entries));
+
+        return { success: true, dirsCreated: 0, filesCreated: entries.length, entries };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+});
+
+// Refresh remote listing from SVN server and update cache
+ipcMain.handle('placeholder:refreshRemoteListing', async (event, localDir) => {
+    const svnRoot = findSvnRoot(localDir) || localDir;
+    if (!isPathWithinProjects(svnRoot)) {
+        return { success: false, error: 'Refused: path outside known project' };
+    }
+    try {
+        const infoOut = await new Promise((resolve) => {
+            const proc = spawn('svn', ['info', svnRoot]);
+            let out = '';
+            proc.stdout.on('data', d => out += d.toString());
+            proc.on('close', () => resolve(out));
+            proc.on('error', () => resolve(''));
+        });
+        const urlMatch = infoOut.match(/^URL:\s*(.+)$/m);
+        if (!urlMatch) return { success: false, error: 'Cannot determine remote URL' };
+        const remoteUrl = urlMatch[1].trim();
+
+        const authData = loadAuthWithDecrypt();
+        let creds = null;
+        const cleanUrl = remoteUrl.replace(/\/+$/, '');
+        const sortedKeys = Object.keys(authData).filter(k => k !== 'global').sort((a, b) => b.length - a.length);
+        for (const key of sortedKeys) {
+            const normKey = key.replace(/\/+$/, '');
+            if (cleanUrl === normKey || cleanUrl.startsWith(normKey + '/')) { creds = authData[key]; break; }
+        }
+        if (!creds && authData.global) creds = authData.global;
+
+        const listArgs = ['list', '-R', remoteUrl, '--non-interactive', '--trust-server-cert'];
+        if (creds) { listArgs.push('--username', creds.username, '--password', creds.password); }
+
+        const listOutput = await new Promise((resolve, reject) => {
+            const proc = spawn('svn', listArgs);
+            let out = '', err = '';
+            proc.stdout.on('data', d => out += d.toString());
+            proc.stderr.on('data', d => err += d.toString());
+            proc.on('close', code => code === 0 ? resolve(out) : reject(new Error(err)));
+            proc.on('error', reject);
+        });
+
+        const entries = listOutput.split('\n').filter(l => l.trim());
+        const cacheFile = path.join(svnRoot, '.svn', 'jelly-remote-listing.json');
+        fs.writeFileSync(cacheFile, JSON.stringify(entries));
+        return { success: true, entries };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+});
+
+// Read cached remote listing
+ipcMain.handle('placeholder:getRemoteListing', async (event, localDir) => {
+    const svnRoot = findSvnRoot(localDir) || localDir;
+    const cacheFile = path.join(svnRoot, '.svn', 'jelly-remote-listing.json');
+    if (fs.existsSync(cacheFile)) {
+        try {
+            return { success: true, entries: JSON.parse(fs.readFileSync(cacheFile, 'utf8')) };
+        } catch (e) { /* fall through */ }
+    }
+    return { success: false, entries: [] };
+});
+
+// Download folder via sparse checkout: svn update --set-depth infinity --parents
+ipcMain.handle('placeholder:downloadFolder', async (event, { wcRoot, folderRelPath }) => {
+    const svnRoot = findSvnRoot(wcRoot) || wcRoot;
+    if (!isPathWithinProjects(svnRoot)) {
+        return { success: false, error: 'Refused: path outside known project' };
+    }
+    const targetPath = folderRelPath ? path.join(svnRoot, folderRelPath) : svnRoot;
+
+    const authData = loadAuthWithDecrypt();
+    let creds = null;
+    try {
+        const infoOut = await new Promise((resolve) => {
+            const proc = spawn('svn', ['info', svnRoot]);
+            let out = '';
+            proc.stdout.on('data', d => out += d.toString());
+            proc.on('close', () => resolve(out));
+            proc.on('error', () => resolve(''));
+        });
+        const urlMatch = infoOut.match(/^URL:\s*(.+)$/m);
+        if (urlMatch) {
+            const repoUrl = urlMatch[1].trim().replace(/\/+$/, '');
+            const sortedKeys = Object.keys(authData).filter(k => k !== 'global').sort((a, b) => b.length - a.length);
+            for (const key of sortedKeys) {
+                const normKey = key.replace(/\/+$/, '');
+                if (repoUrl === normKey || repoUrl.startsWith(normKey + '/')) { creds = authData[key]; break; }
+            }
+        }
+    } catch (e) { /* fall through */ }
+    if (!creds && authData.global) creds = authData.global;
+
+    const updateArgs = ['update', '--set-depth', 'infinity', '--parents', targetPath, '--non-interactive', '--trust-server-cert'];
+    if (creds) { updateArgs.push('--username', creds.username, '--password', creds.password); }
+
+    try {
+        const output = await new Promise((resolve, reject) => {
+            const proc = spawn('svn', updateArgs, { cwd: svnRoot });
+            let out = '', err = '';
+            proc.stdout.on('data', d => {
+                out += d.toString();
+                event.sender.send('placeholder:progress', { current: 0, total: 1, file: d.toString().trim().substring(0, 60) });
+            });
+            proc.stderr.on('data', d => err += d.toString());
+            proc.on('close', code => code === 0 ? resolve(out) : reject(new Error(err)));
+            proc.on('error', reject);
+        });
+        return { success: true, output };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+});
+
+// Truncate folder via sparse checkout: svn update --set-depth empty
+ipcMain.handle('placeholder:truncateFolder', async (event, { wcRoot, folderRelPath }) => {
+    const svnRoot = findSvnRoot(wcRoot) || wcRoot;
+    if (!isPathWithinProjects(svnRoot)) {
+        return { success: false, error: 'Refused: path outside known project' };
+    }
+    const targetPath = folderRelPath ? path.join(svnRoot, folderRelPath) : svnRoot;
+    const updateArgs = ['update', '--set-depth', 'empty', targetPath, '--non-interactive', '--trust-server-cert'];
+
+    try {
+        await new Promise((resolve, reject) => {
+            const proc = spawn('svn', updateArgs, { cwd: svnRoot });
+            let err = '';
+            proc.stderr.on('data', d => err += d.toString());
+            proc.on('close', code => code === 0 ? resolve() : reject(new Error(err)));
+            proc.on('error', reject);
+        });
+        return { success: true };
     } catch (e) {
         return { success: false, error: e.message };
     }

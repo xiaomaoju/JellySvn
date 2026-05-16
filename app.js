@@ -1,6 +1,6 @@
 // App State
 const state = {
-    currentView: 'status',
+    currentView: 'tree',
     projects: [],
     selectedProjectIndex: -1,
     selectedFiles: new Set(),
@@ -36,6 +36,7 @@ const state = {
     treeExpanded: new Set(),
     treeFolderStatus: {},
     treeIsWorkingCopy: true,
+    remoteTree: {},
 
     // Properties view
     properties: [],
@@ -109,8 +110,6 @@ const state = {
     // Log compare
     logSelectedRevisions: new Set(),
 
-    // Placeholder management
-    placeholderEnabled: false,
     placeholderStats: null,
 };
 
@@ -206,6 +205,8 @@ function localizeStaticHTML() {
     const checkoutLabels = document.querySelectorAll('#checkout-modal .input-group label');
     if (checkoutLabels[0]) checkoutLabels[0].textContent = t('modal.repoUrl');
     if (checkoutLabels[1]) checkoutLabels[1].textContent = t('modal.localPath');
+    const phLabel = document.getElementById('checkout-placeholder-label');
+    if (phLabel) phLabel.textContent = t('sparse.checkoutAsSparse');
     // Auth modal labels
     const authLabels = document.querySelectorAll('#auth-modal .input-group label');
     if (authLabels[0]) authLabels[0].textContent = t('modal.repoOrGlobal');
@@ -327,7 +328,7 @@ async function loadSettings() {
             state.settings = { ...state.settings, ...saved };
             state.logLimit = state.settings.logLimit || 20;
         }
-        state.placeholderEnabled = !!state.settings.placeholderEnabled;
+        // placeholderEnabled is legacy — sparse checkout is always available
     } catch (err) {
         // Use defaults
     }
@@ -691,6 +692,7 @@ function selectProject(index) {
         state.blameFile = '';
         state.blameData = [];
         state.treeData = {};
+        state.remoteTree = {};
         state.treeExpanded = new Set();
         state.treeFolderStatus = {};
         state.properties = [];
@@ -710,7 +712,9 @@ function selectProject(index) {
         state.repoBrowserExpanded = new Set();
         state.repoBrowserLoading = new Set();
         renderTabs();
+        state.currentView = 'tree';
         refreshStatus();
+        fetchTree();
         // Restart watcher if auto-refresh enabled
         if (state.settings.autoRefresh) {
             startWatcher();
@@ -772,9 +776,10 @@ function bindEvents() {
             fetchLog();
         } else if (state.currentView === 'tree') {
             state.treeData = {};
+            state.remoteTree = {};
             state.treeExpanded = new Set();
             state.treeFolderStatus = {};
-            fetchTree();
+            fetchTree(true);
         } else if (state.currentView === 'properties') {
             fetchProperties();
         } else if (state.currentView === 'branch') {
@@ -803,11 +808,47 @@ function bindEvents() {
 
     // Console Toggle
     document.getElementById('panel-header-toggle').addEventListener('click', () => {
-        const panel = document.querySelector('.bottom-panel');
+        const panel = document.getElementById('bottom-panel');
         const icon = document.getElementById('console-toggle-icon');
         panel.classList.toggle('collapsed');
         icon.textContent = panel.classList.contains('collapsed') ? '▲' : '▼';
     });
+
+    // Console Panel Resize
+    const resizeHandle = document.getElementById('panel-resize-handle');
+    if (resizeHandle) {
+        let isResizing = false;
+        let startY = 0;
+        let startHeight = 0;
+
+        resizeHandle.addEventListener('mousedown', (e) => {
+            const panel = document.getElementById('bottom-panel');
+            if (panel.classList.contains('collapsed')) return;
+            isResizing = true;
+            startY = e.clientY;
+            startHeight = panel.offsetHeight;
+            resizeHandle.classList.add('active');
+            document.body.style.cursor = 'ns-resize';
+            document.body.style.userSelect = 'none';
+            e.preventDefault();
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isResizing) return;
+            const panel = document.getElementById('bottom-panel');
+            const delta = startY - e.clientY;
+            const newHeight = Math.min(Math.max(startHeight + delta, 60), window.innerHeight * 0.7);
+            panel.style.height = newHeight + 'px';
+        });
+
+        document.addEventListener('mouseup', () => {
+            if (!isResizing) return;
+            isResizing = false;
+            resizeHandle.classList.remove('active');
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+        });
+    }
 
     // Bulk Actions
     document.getElementById('btn-bulk-update').addEventListener('click', () => {
@@ -836,38 +877,61 @@ function bindEvents() {
     document.getElementById('btn-bulk-ph-truncate').addEventListener('click', bulkPlaceholderTruncate);
 
     // Commit Modal
-    document.getElementById('btn-confirm-commit').addEventListener('click', () => {
+    document.getElementById('btn-confirm-commit').addEventListener('click', async () => {
         const msg = document.getElementById('commit-message').value;
         if (!msg) return alert('Please enter a commit message.');
-        const files = Array.from(state.selectedFiles);
-        const placeholderPaths = new Set(
-            state.workingCopy.filter(f => f.status === 'placeholder').map(f => f.path)
-        );
-        const safeFiles = files.filter(f => !placeholderPaths.has(f));
-        const excluded = files.length - safeFiles.length;
-        if (excluded > 0) {
-            logToConsole(t('placeholder.excluded', { count: excluded }), 'warning');
-        }
+        const safeFiles = Array.from(state.selectedFiles);
         if (safeFiles.length === 0) {
-            alert('No files to commit after excluding placeholders.');
+            alert('No files to commit.');
             return;
         }
         closeModal();
+
+        const missingFiles = safeFiles.filter(f => {
+            const wc = state.workingCopy.find(w => w.path === f);
+            return wc && wc.status === 'missing';
+        });
+        if (missingFiles.length > 0) {
+            logToConsole(`Auto svn delete ${missingFiles.length} missing file(s)...`, 'system');
+            await runSvnSilent(['delete', ...missingFiles]);
+        }
+
         runSvn(['commit', '-m', msg, ...safeFiles]);
     });
 
     // Checkout Modal
     document.getElementById('btn-confirm-checkout').addEventListener('click', async () => {
         const url = document.getElementById('checkout-url').value.trim();
-        const path = document.getElementById('checkout-path').value.trim().replace(/\/+$/, '');
-        if (!url || !path) return alert('Please enter both URL and Path');
+        const localPath = document.getElementById('checkout-path').value.trim().replace(/\/+$/, '');
+        const sparseCheckout = document.getElementById('checkout-placeholder').checked;
+        if (!url || !localPath) return alert('Please enter both URL and Path');
 
         closeModal();
-        const success = await runSvn(['checkout', url, path], url);
-        if (success) {
-            const projectName = path.split('/').pop() || 'New Repo';
-            await window.api.saveProject({ name: projectName, path, url });
-            await loadProjects(path);
+
+        if (sparseCheckout) {
+            showOperation(t('sparse.checkingOut'));
+            try {
+                const result = await window.api.placeholderCheckout({ remoteUrl: url, localDir: localPath });
+                hideOperation();
+                if (result.success) {
+                    logToConsole(`Sparse checkout complete: ${result.dirsCreated || 0} dirs created`, 'success');
+                    const projectName = localPath.split('/').pop() || 'New Repo';
+                    await window.api.saveProject({ name: projectName, path: localPath, url, placeholderRemoteUrl: url });
+                    await loadProjects(localPath);
+                } else {
+                    logToConsole(`Sparse checkout failed: ${result.error}`, 'error');
+                }
+            } catch (e) {
+                hideOperation();
+                logToConsole(`Sparse checkout error: ${e.message}`, 'error');
+            }
+        } else {
+            const success = await runSvn(['checkout', url, localPath], url);
+            if (success) {
+                const projectName = localPath.split('/').pop() || 'New Repo';
+                await window.api.saveProject({ name: projectName, path: localPath, url });
+                await loadProjects(localPath);
+            }
         }
     });
 
@@ -1200,21 +1264,6 @@ async function refreshStatus() {
                 return { path, status };
             });
 
-            // Placeholder override: 0-byte modified files → placeholder status
-            if (state.placeholderEnabled) {
-                const scanResult = await window.api.placeholderScan(project.path);
-                if (scanResult.success) {
-                    state.placeholderStats = scanResult;
-                    const placeholderSet = new Set(
-                        scanResult.files.filter(f => f.isPlaceholder).map(f => f.relPath)
-                    );
-                    for (const file of state.workingCopy) {
-                        if (file.status === 'modified' && placeholderSet.has(file.path)) {
-                            file.status = 'placeholder';
-                        }
-                    }
-                }
-            }
         } else {
             state.workingCopy = [];
             // If auth failed, surface the login modal instead of retrying
@@ -1258,26 +1307,8 @@ function updateBulkUI() {
     }
     const phDownloadBtn = document.getElementById('btn-bulk-ph-download');
     const phTruncateBtn = document.getElementById('btn-bulk-ph-truncate');
-    if (phDownloadBtn && phTruncateBtn) {
-        if (state.placeholderEnabled && state.selectedFiles.size > 0) {
-            const selectedArr = Array.from(state.selectedFiles);
-            const hasPlaceholders = selectedArr.some(f => {
-                const file = state.workingCopy.find(wc => wc.path === f);
-                return file && file.status === 'placeholder';
-            });
-            const hasRealFiles = selectedArr.some(f => {
-                const file = state.workingCopy.find(wc => wc.path === f);
-                return file && file.status !== 'placeholder' && file.status !== 'untracked';
-            });
-            phDownloadBtn.classList.toggle('hidden', !hasPlaceholders);
-            phDownloadBtn.textContent = t('placeholder.batchDownload');
-            phTruncateBtn.classList.toggle('hidden', !hasRealFiles);
-            phTruncateBtn.textContent = t('placeholder.batchTruncate');
-        } else {
-            phDownloadBtn.classList.add('hidden');
-            phTruncateBtn.classList.add('hidden');
-        }
-    }
+    if (phDownloadBtn) phDownloadBtn.classList.add('hidden');
+    if (phTruncateBtn) phTruncateBtn.classList.add('hidden');
 }
 
 function openCommitModal() {
@@ -1385,13 +1416,6 @@ function renderStatus() {
         return;
     }
     let html = '<div class="status-list">';
-    // Placeholder stats bar
-    if (state.placeholderEnabled && state.placeholderStats) {
-        const ps = state.placeholderStats;
-        html += `<div class="placeholder-stats-bar">
-            <span class="stat-item">${t('placeholder.stats', { placeholders: ps.placeholders, real: ps.realFiles, saved: formatFileSize(ps.savedBytes) })}</span>
-        </div>`;
-    }
     state.workingCopy.forEach((file, index) => {
         const isSelected = state.selectedFiles.has(file.path);
         const ep = escapePath(file.path);
@@ -1418,11 +1442,8 @@ function renderStatus() {
                          <button class="btn-primary" onclick="runSvn(['resolve', '--accept', 'working', '${ep}'])">${t('btn.resolveMine')}</button>
                          <button class="btn-secondary" onclick="runSvn(['resolve', '--accept', 'theirs-full', '${ep}'])">${t('btn.resolveTheirs')}</button>
                          <button class="btn-secondary" onclick="if(confirm('${t('msg.confirmRevert')} ${ep}?')) runSvn(['revert', '-R', '${ep}'])">${t('btn.revert')}</button>` :
-                file.status === 'placeholder' ?
-                `<button class="btn-primary" onclick="downloadPlaceholder('${ep}')">${t('placeholder.download')}</button>` :
                 `<button class="btn-secondary" onclick="showDiff('${ep}')">${t('btn.diff')}</button>
-                         <button class="btn-secondary" onclick="if(confirm('${t('msg.confirmRevert')} ${ep}?')) runSvn(['revert', '-R', '${ep}'])">${t('btn.revert')}</button>
-                         ${state.placeholderEnabled ? `<button class="btn-secondary" onclick="truncateToPlaceholder('${ep}')">${t('placeholder.truncate')}</button>` : ''}`
+                         <button class="btn-secondary" onclick="if(confirm('${t('msg.confirmRevert')} ${ep}?')) runSvn(['revert', '-R', '${ep}'])">${t('btn.revert')}</button>`
             }
                 </div>
             </div>
@@ -1443,6 +1464,11 @@ function renderStatus() {
     elements.contentArea.innerHTML = html;
 }
 
+function getPlaceholderRemoteUrl() {
+    const project = state.projects[state.selectedProjectIndex];
+    return (project && project.placeholderRemoteUrl) || (project && project.url) || state.settings.placeholderRemoteUrl || '';
+}
+
 async function downloadPlaceholder(relPath) {
     const project = state.projects[state.selectedProjectIndex];
     if (!project) return;
@@ -1450,7 +1476,7 @@ async function downloadPlaceholder(relPath) {
     const result = await window.api.placeholderDownload({
         wcRoot: project.path,
         files: [relPath],
-        remoteUrl: state.settings.placeholderRemoteUrl || ''
+        remoteUrl: getPlaceholderRemoteUrl()
     });
     hideOperation();
     if (result.success > 0) {
@@ -1492,7 +1518,7 @@ async function bulkPlaceholderDownload() {
     const result = await window.api.placeholderDownload({
         wcRoot: project.path,
         files: placeholderFiles,
-        remoteUrl: state.settings.placeholderRemoteUrl || ''
+        remoteUrl: getPlaceholderRemoteUrl()
     });
     hideOperation();
     logToConsole(`Batch download: ${result.success} succeeded, ${result.failed} failed`, result.failed > 0 ? 'warning' : 'success');
@@ -1523,20 +1549,19 @@ async function downloadPlaceholderTree(filePath, event) {
     event.stopPropagation();
     const project = state.projects[state.selectedProjectIndex];
     if (!project) return;
-    const relPath = filePath.startsWith(project.path) ? filePath.substring(project.path.length + 1) : filePath;
+    const parentDir = filePath.substring(0, filePath.lastIndexOf('/'));
+    const parentRelPath = parentDir.startsWith(project.path) ? parentDir.substring(project.path.length + 1) : parentDir;
     showOperation(t('placeholder.downloading', { current: 1, total: 1 }));
-    const result = await window.api.placeholderDownload({
+    const result = await window.api.placeholderDownloadFolder({
         wcRoot: project.path,
-        files: [relPath],
-        remoteUrl: state.settings.placeholderRemoteUrl || ''
+        folderRelPath: parentRelPath
     });
     hideOperation();
-    if (result.success > 0) {
-        logToConsole(`Downloaded: ${relPath}`, 'success');
+    if (result.success) {
+        logToConsole(`Downloaded: ${parentRelPath}`, 'success');
     } else {
-        logToConsole(`Failed to download: ${relPath}`, 'error');
+        logToConsole(`Failed to download: ${result.error}`, 'error');
     }
-    const parentDir = filePath.substring(0, filePath.lastIndexOf('/'));
     const refreshed = await window.api.listDirectory(parentDir);
     if (refreshed.success) state.treeData[parentDir] = refreshed.items;
     render();
@@ -1544,14 +1569,22 @@ async function downloadPlaceholderTree(filePath, event) {
 
 async function truncatePlaceholderTree(filePath, event) {
     event.stopPropagation();
-    if (!confirm(`Convert to placeholder? ${filePath}`)) return;
-    const result = await window.api.placeholderTruncate({ files: [filePath] });
-    if (result.success > 0) {
-        logToConsole(`Converted to placeholder: ${filePath}`, 'success');
-    } else {
-        logToConsole(`Failed to truncate: ${filePath}`, 'error');
-    }
+    const project = state.projects[state.selectedProjectIndex];
+    if (!project) return;
     const parentDir = filePath.substring(0, filePath.lastIndexOf('/'));
+    const parentRelPath = parentDir.startsWith(project.path) ? parentDir.substring(project.path.length + 1) : parentDir;
+    if (!confirm(t('placeholder.confirmTruncateFolder') || `Truncate parent folder to sparse?`)) return;
+    showOperation('Truncating...');
+    const result = await window.api.placeholderTruncateFolder({
+        wcRoot: project.path,
+        folderRelPath: parentRelPath
+    });
+    hideOperation();
+    if (result.success) {
+        logToConsole(`Truncated (sparse): ${parentRelPath}`, 'success');
+    } else {
+        logToConsole(`Failed to truncate: ${result.error}`, 'error');
+    }
     const refreshed = await window.api.listDirectory(parentDir);
     if (refreshed.success) state.treeData[parentDir] = refreshed.items;
     render();
@@ -1561,28 +1594,23 @@ async function downloadFolderPlaceholders(folderPath, event) {
     event.stopPropagation();
     const project = state.projects[state.selectedProjectIndex];
     if (!project) return;
-    const scanResult = await window.api.placeholderScan(folderPath);
-    if (!scanResult.success || scanResult.placeholders === 0) return;
-    const relPaths = scanResult.files
-        .filter(f => f.isPlaceholder)
-        .map(f => {
-            const absPath = folderPath + '/' + f.relPath;
-            return absPath.startsWith(project.path) ? absPath.substring(project.path.length + 1) : f.relPath;
-        });
-    if (relPaths.length === 0) return;
+    const folderRelPath = folderPath.startsWith(project.path) ? folderPath.substring(project.path.length + 1) : folderPath;
 
-    const progressHandler = (payload) => {
-        showOperation(t('placeholder.downloading', { current: payload.current, total: payload.total }));
-    };
-    window.api.onPlaceholderProgress(progressHandler);
+    showOperation(t('placeholder.downloading', { current: 1, total: 1 }));
+    window.api.onPlaceholderProgress((payload) => {
+        showOperation(payload.file || t('placeholder.downloading', { current: 1, total: 1 }));
+    });
 
-    const result = await window.api.placeholderDownload({
+    const result = await window.api.placeholderDownloadFolder({
         wcRoot: project.path,
-        files: relPaths,
-        remoteUrl: state.settings.placeholderRemoteUrl || ''
+        folderRelPath
     });
     hideOperation();
-    logToConsole(`Folder download: ${result.success} succeeded, ${result.failed} failed`, result.failed > 0 ? 'warning' : 'success');
+    if (result.success) {
+        logToConsole(`Folder downloaded: ${folderRelPath}`, 'success');
+    } else {
+        logToConsole(`Folder download failed: ${result.error}`, 'error');
+    }
     const refreshed = await window.api.listDirectory(folderPath);
     if (refreshed.success) state.treeData[folderPath] = refreshed.items;
     render();
@@ -1590,14 +1618,22 @@ async function downloadFolderPlaceholders(folderPath, event) {
 
 async function truncateFolderFiles(folderPath, event) {
     event.stopPropagation();
-    const scanResult = await window.api.placeholderScan(folderPath);
-    if (!scanResult.success || scanResult.realFiles === 0) return;
-    if (!confirm(`Convert ${scanResult.realFiles} file(s) to placeholders?`)) return;
-    const absPaths = scanResult.files
-        .filter(f => !f.isPlaceholder)
-        .map(f => folderPath + '/' + f.relPath);
-    const result = await window.api.placeholderTruncate({ files: absPaths });
-    logToConsole(`Folder truncate: ${result.success} succeeded, ${result.failed} failed`, result.failed > 0 ? 'warning' : 'success');
+    const project = state.projects[state.selectedProjectIndex];
+    if (!project) return;
+    if (!confirm(t('sparse.confirmTruncate') || `Clean this folder? Local files will be removed (SVN sparse checkout).`)) return;
+    const folderRelPath = folderPath.startsWith(project.path) ? folderPath.substring(project.path.length + 1) : folderPath;
+
+    showOperation('Truncating folder...');
+    const result = await window.api.placeholderTruncateFolder({
+        wcRoot: project.path,
+        folderRelPath
+    });
+    hideOperation();
+    if (result.success) {
+        logToConsole(`Folder truncated (sparse): ${folderRelPath}`, 'success');
+    } else {
+        logToConsole(`Folder truncate failed: ${result.error}`, 'error');
+    }
     const refreshed = await window.api.listDirectory(folderPath);
     if (refreshed.success) state.treeData[folderPath] = refreshed.items;
     render();
@@ -1607,7 +1643,7 @@ async function syncPlaceholderStructure(event) {
     event.stopPropagation();
     const project = state.projects[state.selectedProjectIndex];
     if (!project) return;
-    const remoteUrl = state.settings.placeholderRemoteUrl;
+    const remoteUrl = getPlaceholderRemoteUrl();
     if (!remoteUrl) {
         alert('Please set Remote Repository URL in Settings first.');
         return;
@@ -2058,7 +2094,7 @@ function renderCommitView() {
         return;
     }
 
-    let committable = state.workingCopy.filter(f => f.status !== 'untracked' && f.status !== 'placeholder');
+    let committable = state.workingCopy.filter(f => f.status !== 'untracked');
     let untracked = state.workingCopy.filter(f => f.status === 'untracked');
 
     let html = '<div class="commit-view-container">';
@@ -2164,17 +2200,18 @@ async function inlineCommit() {
     if (!msg) return alert('Please enter a commit message.');
     if (state.selectedFiles.size === 0) return alert('Please select files to commit.');
 
-    const files = Array.from(state.selectedFiles);
-    // Exclude placeholder files from commit
-    const placeholderPaths = new Set(
-        state.workingCopy.filter(f => f.status === 'placeholder').map(f => f.path)
-    );
-    const safeFiles = files.filter(f => !placeholderPaths.has(f));
-    const excluded = files.length - safeFiles.length;
-    if (excluded > 0) {
-        logToConsole(t('placeholder.excluded', { count: excluded }), 'warning');
+    const safeFiles = Array.from(state.selectedFiles);
+    if (safeFiles.length === 0) return alert('No files to commit.');
+
+    const missingFiles = safeFiles.filter(f => {
+        const wc = state.workingCopy.find(w => w.path === f);
+        return wc && wc.status === 'missing';
+    });
+    if (missingFiles.length > 0) {
+        logToConsole(`Auto svn delete ${missingFiles.length} missing file(s)...`, 'system');
+        await runSvnSilent(['delete', ...missingFiles]);
     }
-    if (safeFiles.length === 0) return alert('No files to commit after excluding placeholders.');
+
     const success = await runSvn(['commit', '-m', msg, ...safeFiles]);
     if (success) {
         state.selectedFiles.clear();
@@ -2784,7 +2821,31 @@ function copyDiffToClipboard() {
 }
 
 // === Tree View ===
-async function fetchTree() {
+
+function parseRemoteListingToTree(entries, rootPath) {
+    const tree = {};
+    for (const entry of entries) {
+        const isDir = entry.endsWith('/');
+        const clean = isDir ? entry.slice(0, -1) : entry;
+        const parts = clean.split('/');
+        const name = parts[parts.length - 1];
+        const parentRel = parts.slice(0, -1).join('/');
+        const parentAbs = parentRel ? rootPath + '/' + parentRel : rootPath;
+        const absPath = rootPath + '/' + clean;
+        if (!tree[parentAbs]) tree[parentAbs] = [];
+        tree[parentAbs].push({
+            name,
+            path: absPath,
+            type: isDir ? 'directory' : 'file',
+            size: isDir ? null : 0,
+            mtime: null,
+            remote: true
+        });
+    }
+    return tree;
+}
+
+async function fetchTree(forceRefresh = false) {
     const project = state.projects[state.selectedProjectIndex];
     if (!project) {
         render();
@@ -2792,6 +2853,7 @@ async function fetchTree() {
     }
 
     const rootPath = project.path;
+    state.remoteTree = {};
     try {
         const repoCheck = await window.api.validateRepo(project.path);
         state.treeIsWorkingCopy = repoCheck.isValid;
@@ -2803,11 +2865,55 @@ async function fetchTree() {
             logToConsole(`Failed to read directory: ${result.error}`, 'error');
             state.treeData[rootPath] = [];
         }
+
+        const remoteUrl = (project.placeholderRemoteUrl || project.url || '');
+        if (state.treeIsWorkingCopy && remoteUrl) {
+            if (forceRefresh) {
+                const oldListing = await window.api.placeholderGetRemoteListing(rootPath);
+                const oldSet = new Set(oldListing.success ? oldListing.entries : []);
+
+                showOperation(t('placeholder.syncStructure') || 'Syncing remote listing...');
+                const listing = await window.api.placeholderRefreshRemoteListing(rootPath);
+                hideOperation();
+                if (listing.success && listing.entries.length > 0) {
+                    const newSet = new Set(listing.entries);
+                    const added = listing.entries.filter(e => !oldSet.has(e));
+                    const removed = [...oldSet].filter(e => !newSet.has(e));
+                    if (added.length > 0 || removed.length > 0) {
+                        for (const a of added) logToConsole(`Added   ${a}`, 'success');
+                        for (const r of removed) logToConsole(`Removed ${r}`, 'warning');
+                        logToConsole(`Remote changes: +${added.length} / -${removed.length}`, 'system');
+                    } else {
+                        logToConsole(`Remote listing up to date (${listing.entries.length} entries)`, 'system');
+                    }
+                    state.remoteTree = parseRemoteListingToTree(listing.entries, rootPath);
+                    state.treeData[rootPath] = mergeTreeWithRemote(state.treeData[rootPath], rootPath);
+                }
+            } else {
+                const cached = await window.api.placeholderGetRemoteListing(rootPath);
+                if (cached.success && cached.entries.length > 0) {
+                    state.remoteTree = parseRemoteListingToTree(cached.entries, rootPath);
+                    state.treeData[rootPath] = mergeTreeWithRemote(state.treeData[rootPath], rootPath);
+                }
+            }
+        }
     } catch (err) {
         logToConsole(`Tree error: ${err.message}`, 'error');
         state.treeData[rootPath] = [];
     }
     render();
+}
+
+function mergeTreeWithRemote(localItems, dirPath) {
+    if (!state.remoteTree[dirPath]) return localItems;
+    const remoteItems = state.remoteTree[dirPath];
+    if (!localItems || localItems.length === 0) return remoteItems;
+    const localSet = new Set(localItems.map(i => i.path));
+    const merged = [...localItems];
+    for (const ri of remoteItems) {
+        if (!localSet.has(ri.path)) merged.push(ri);
+    }
+    return merged;
 }
 
 async function toggleTreeFolder(dirPath) {
@@ -2817,23 +2923,48 @@ async function toggleTreeFolder(dirPath) {
         try {
             const result = await window.api.listDirectory(dirPath);
             if (result.success) {
-                state.treeData[dirPath] = result.items;
+                state.treeData[dirPath] = mergeTreeWithRemote(result.items, dirPath);
             } else {
-                state.treeData[dirPath] = [];
-                logToConsole(`Cannot read: ${result.error}`, 'error');
+                state.treeData[dirPath] = mergeTreeWithRemote([], dirPath);
+                if (!state.remoteTree[dirPath]) logToConsole(`Cannot read: ${result.error}`, 'error');
             }
         } catch (err) {
-            state.treeData[dirPath] = [];
-            logToConsole(`Tree error: ${err.message}`, 'error');
+            state.treeData[dirPath] = mergeTreeWithRemote([], dirPath);
+            if (!state.remoteTree[dirPath]) logToConsole(`Tree error: ${err.message}`, 'error');
         }
         state.treeExpanded.add(dirPath);
     }
     render();
 }
 
+function revealInFileManager(filePath, event) {
+    event.stopPropagation();
+    window.api.revealInFileManager(filePath);
+}
+
 async function treeFolderUpdate(dirPath, event) {
     event.stopPropagation();
-    await runSvn(['update', dirPath]);
+    const project = state.projects[state.selectedProjectIndex];
+    if (!project) return;
+    const url = project.placeholderRemoteUrl || project.url || null;
+
+    // Resolve any existing tree conflicts before update
+    await runSvnSilent(['resolve', '--accept', 'working', '-R', project.path]);
+
+    await runSvn(['update', '--parents', dirPath], url);
+
+    if (url) {
+        const listing = await window.api.placeholderRefreshRemoteListing(project.path);
+        if (listing.success && listing.entries.length > 0) {
+            state.remoteTree = parseRemoteListingToTree(listing.entries, project.path);
+        }
+    }
+
+    const refreshed = await window.api.listDirectory(dirPath);
+    if (refreshed.success) {
+        state.treeData[dirPath] = mergeTreeWithRemote(refreshed.items, dirPath);
+    }
+    render();
 }
 
 async function treeFolderStatus(dirPath, event) {
@@ -2903,9 +3034,10 @@ function renderTree() {
         <span class="tree-icon">📦</span>
         <span class="tree-name">${escapeHtml(rootName)}</span>
         <div class="tree-actions">
-            <button class="btn-secondary btn-small" onclick="treeFolderUpdate('${escapeHtml(rootPath)}', event)">Update</button>
-            <button class="btn-secondary btn-small" onclick="treeFolderStatus('${escapeHtml(rootPath)}', event)">Status</button>
-            ${(!state.treeIsWorkingCopy && state.placeholderEnabled && state.settings.placeholderRemoteUrl) ?
+            <button class="btn-secondary btn-small" onclick="treeFolderUpdate('${escapeHtml(rootPath)}', event)">${t('btn.update')}</button>
+            <button class="btn-secondary btn-small" onclick="treeFolderStatus('${escapeHtml(rootPath)}', event)">${t('btn.status')}</button>
+            <button class="btn-secondary btn-small" onclick="revealInFileManager('${escapeHtml(rootPath)}', event)">${t('tree.revealInFinder')}</button>
+            ${!state.treeIsWorkingCopy && getPlaceholderRemoteUrl() ?
                 `<button class="btn-secondary btn-small" onclick="syncPlaceholderStructure(event)">${t('placeholder.syncStructure')}</button>` : ''}
         </div>
     </div>`;
@@ -2942,6 +3074,25 @@ function formatMtime(ms) {
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+function collectTreeFolderStats(dirPath) {
+    let totalFiles = 0, totalBytes = 0;
+    const children = state.treeData[dirPath];
+    if (!children) return { totalFiles, totalBytes };
+    for (const child of children) {
+        if (child.type === 'file') {
+            totalFiles++;
+            totalBytes += child.size || 0;
+        } else if (child.type === 'directory') {
+            const sub = collectTreeFolderStats(child.path);
+            totalFiles += sub.totalFiles;
+            totalBytes += sub.totalBytes;
+        }
+    }
+    return { totalFiles, totalBytes };
+}
+
+const TREE_HIDDEN_FILES = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini']);
+
 function renderTreeChildren(parentPath, depth) {
     const items = state.treeData[parentPath];
     if (!items || items.length === 0) return '';
@@ -2950,42 +3101,45 @@ function renderTreeChildren(parentPath, depth) {
     const indent = depth * 24;
 
     for (const item of items) {
+        if (TREE_HIDDEN_FILES.has(item.name)) continue;
         const safePath = escapeHtml(item.path);
         const mtime = formatMtime(item.mtime);
         const mtimeHtml = mtime ? `<span class="tree-meta-mtime">${mtime}</span>` : '';
 
         if (item.type === 'directory') {
+            const isRemote = item.remote === true;
             const isExpanded = state.treeExpanded.has(item.path);
             const children = state.treeData[item.path];
-            const countHtml = children ? `<span class="tree-meta-count">${children.length} item${children.length !== 1 ? 's' : ''}</span>` : '';
-            // Placeholder folder stats
-            let phFolderHtml = '';
-            if (state.placeholderEnabled && children) {
-                const allFiles = children.filter(c => c.type === 'file');
-                const phCount = allFiles.filter(c => c.size === 0).length;
-                const realCount = allFiles.filter(c => c.size > 0).length;
-                if (allFiles.length > 0) {
-                    const statsText = t('placeholder.folderStats', { total: allFiles.length, count: phCount });
-                    phFolderHtml = `<span class="placeholder-folder-stats">(${statsText})</span>`;
-                    phFolderHtml += '<span class="placeholder-folder-actions">';
-                    if (phCount > 0) {
-                        phFolderHtml += `<button class="btn-secondary btn-small" onclick="downloadFolderPlaceholders('${safePath}', event)">${t('placeholder.downloadAll')}</button>`;
-                    }
-                    if (realCount > 0) {
-                        phFolderHtml += `<button class="btn-secondary btn-small" onclick="truncateFolderFiles('${safePath}', event)">${t('placeholder.truncateAll')}</button>`;
-                    }
-                    phFolderHtml += '</span>';
+            const countHtml = children ? `<span class="tree-meta-count">${t('tree.itemCount', { count: children.length })}</span>` : '';
+            let folderStatsHtml = '';
+            if (isRemote) {
+                folderStatsHtml = `<span class="tree-meta-notdownloaded">${t('placeholder.notDownloaded')}</span>`;
+            } else if (children) {
+                const stats = collectTreeFolderStats(item.path);
+                if (stats.totalFiles > 0) {
+                    const sizeText = stats.totalBytes > 0 ? ` · ${formatFileSize(stats.totalBytes)}` : '';
+                    folderStatsHtml = `<span class="tree-meta-count">${stats.totalFiles} ${t('tree.files')}${sizeText}</span>`;
                 }
             }
-            html += `<div class="tree-node" data-path="${safePath}" style="padding-left: ${indent}px" onclick="toggleTreeFolder('${safePath}')">
+            const folderIcon = isRemote ? '☁️' : (isExpanded ? '📂' : '📁');
+            const remoteClass = isRemote ? ' tree-node-remote' : '';
+            let actionsHtml = '';
+            if (isRemote) {
+                actionsHtml = `<button class="btn-secondary btn-small" onclick="downloadFolderPlaceholders('${safePath}', event)">${t('placeholder.downloadAll')}</button>`;
+            } else {
+                actionsHtml = `<button class="btn-secondary btn-small" onclick="treeFolderUpdate('${safePath}', event)">${t('btn.update')}</button>
+                    <button class="btn-secondary btn-small" onclick="treeFolderStatus('${safePath}', event)">${t('btn.status')}</button>
+                    <button class="btn-secondary btn-small" onclick="revealInFileManager('${safePath}', event)">${t('tree.revealInFinder')}</button>`;
+                if (depth > 0) {
+                    actionsHtml += `<button class="btn-secondary btn-small btn-danger-subtle" onclick="truncateFolderFiles('${safePath}', event)">${t('sparse.truncate')}</button>`;
+                }
+            }
+            html += `<div class="tree-node${remoteClass}" data-path="${safePath}" style="padding-left: ${indent}px" onclick="toggleTreeFolder('${safePath}')">
                 <span class="tree-toggle ${isExpanded ? 'expanded' : ''}">&#9654;</span>
-                <span class="tree-icon">${isExpanded ? '📂' : '📁'}</span>
+                <span class="tree-icon">${folderIcon}</span>
                 <span class="tree-name">${escapeHtml(item.name)}</span>
-                <span class="tree-meta">${countHtml}${phFolderHtml}${mtimeHtml}</span>
-                <div class="tree-actions">
-                    <button class="btn-secondary btn-small" onclick="treeFolderUpdate('${safePath}', event)">Update</button>
-                    <button class="btn-secondary btn-small" onclick="treeFolderStatus('${safePath}', event)">Status</button>
-                </div>
+                <span class="tree-meta">${countHtml}${folderStatsHtml}${mtimeHtml}</span>
+                <div class="tree-actions">${actionsHtml}</div>
             </div>`;
 
             if (state.treeFolderStatus[item.path] && state.treeFolderStatus[item.path].length > 0) {
@@ -2996,18 +3150,21 @@ function renderTreeChildren(parentPath, depth) {
                 html += renderTreeChildren(item.path, depth + 1);
             }
         } else {
-            const isPlaceholder = state.placeholderEnabled && item.size === 0;
-            const sizeHtml = item.size != null ? `<span class="tree-meta-size">${formatFileSize(item.size)}</span>` : '';
-            const phBadge = state.placeholderEnabled ? (isPlaceholder ? '<span class="file-badge badge-placeholder" style="font-size:10px;padding:2px 5px;margin-right:4px;">P</span>' : '<span style="color:#42a5f5;margin-right:4px;">🔵</span>') : '';
-            const phAction = state.placeholderEnabled ? (isPlaceholder ?
-                `<button class="btn-secondary btn-small" onclick="downloadPlaceholderTree('${safePath}', event)">${t('placeholder.download')}</button>` :
-                `<button class="btn-secondary btn-small" onclick="truncatePlaceholderTree('${safePath}', event)">${t('placeholder.truncate')}</button>`) : '';
-            html += `<div class="tree-node tree-node-file" data-path="${safePath}" style="padding-left: ${indent}px">
+            const isRemote = item.remote === true;
+            const sizeHtml = (!isRemote && item.size != null) ? `<span class="tree-meta-size">${formatFileSize(item.size)}</span>` : '';
+            const remoteClass = isRemote ? ' tree-node-remote' : '';
+            let fileActions = '';
+            if (isRemote) {
+                fileActions = `<button class="btn-secondary btn-small" onclick="downloadPlaceholderTree('${safePath}', event)">${t('placeholder.download')}</button>`;
+            } else {
+                fileActions = `<button class="btn-secondary btn-small" onclick="revealInFileManager('${safePath}', event)">${t('tree.revealInFinder')}</button>`;
+            }
+            html += `<div class="tree-node tree-node-file${remoteClass}" data-path="${safePath}" style="padding-left: ${indent}px">
                 <span class="tree-toggle"></span>
-                <span class="tree-icon">📄</span>
-                ${phBadge}<span class="tree-name file">${escapeHtml(item.name)}</span>
+                <span class="tree-icon">${isRemote ? '☁️' : '📄'}</span>
+                <span class="tree-name file">${escapeHtml(item.name)}</span>
                 <span class="tree-meta">${sizeHtml}${mtimeHtml}</span>
-                <div class="tree-actions">${phAction}</div>
+                <div class="tree-actions">${fileActions}</div>
             </div>`;
         }
     }
@@ -3808,25 +3965,14 @@ function renderSettings() {
         </div>
     </div>`;
 
-    // Placeholder
-    html += `<div class="section-label">${t('placeholder.enabled')}</div>
+    // Sparse Checkout
+    html += `<div class="section-label">${t('settings.sparseCheckout')}</div>
     <div class="settings-card">
         <div class="settings-row">
             <div class="settings-info">
-                <span class="settings-title">${t('placeholder.enabled')}</span>
-                <span class="settings-desc">${t('placeholder.enabledDesc')}</span>
+                <span class="settings-title">${t('settings.sparseCheckoutDesc')}</span>
+                <span class="settings-desc">${t('settings.sparseCheckoutHint')}</span>
             </div>
-            <label class="toggle-switch">
-                <input type="checkbox" id="settings-placeholder-enabled" ${state.placeholderEnabled ? 'checked' : ''} onchange="onPlaceholderToggle()">
-                <span class="toggle-slider"></span>
-            </label>
-        </div>
-        <div class="settings-row">
-            <div class="settings-info">
-                <span class="settings-title">${t('placeholder.remoteUrl')}</span>
-                <span class="settings-desc">${t('placeholder.remoteUrlDesc')}</span>
-            </div>
-            <input type="text" id="settings-placeholder-url" class="settings-input" style="width: 320px;" placeholder="https://svn.example.com/repo/trunk" value="${escapeHtml(state.settings.placeholderRemoteUrl || '')}" onchange="onPlaceholderUrlChange()">
         </div>
     </div>`;
 
