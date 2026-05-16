@@ -268,10 +268,13 @@ ipcMain.handle('load-projects', () => {
 
 ipcMain.handle('save-project', (event, project) => {
     const projects = loadData(PROJECTS_FILE);
-    if (!projects.some(p => p.path === project.path)) {
+    const idx = projects.findIndex(p => p.path === project.path);
+    if (idx >= 0) {
+        projects[idx] = { ...projects[idx], ...project };
+    } else {
         projects.push(project);
-        saveData(PROJECTS_FILE, projects);
     }
+    saveData(PROJECTS_FILE, projects);
     return { success: true };
 });
 

@@ -151,9 +151,10 @@ async function init() {
     bindOpenWithArgs();
     await loadProjects();
     // Re-apply translated title after projects load (HTML has English default)
-    const titleKeys = { 'status': 'view.status' };
-    if (titleKeys[state.currentView]) {
-        elements.pageTitle.textContent = t(titleKeys[state.currentView]);
+    if (state.currentView === 'tree') {
+        elements.pageTitle.textContent = t('view.tree');
+    } else if (state.currentView === 'status') {
+        elements.pageTitle.textContent = t('view.status');
     }
 
     // Add scroll shadow indicator to nav-menu
@@ -712,9 +713,8 @@ function selectProject(index) {
         state.repoBrowserExpanded = new Set();
         state.repoBrowserLoading = new Set();
         renderTabs();
-        state.currentView = 'tree';
+        switchView('tree');
         refreshStatus();
-        fetchTree();
         // Restart watcher if auto-refresh enabled
         if (state.settings.autoRefresh) {
             startWatcher();
@@ -914,7 +914,7 @@ function bindEvents() {
                 const result = await window.api.placeholderCheckout({ remoteUrl: url, localDir: localPath });
                 hideOperation();
                 if (result.success) {
-                    logToConsole(`Sparse checkout complete: ${result.dirsCreated || 0} dirs created`, 'success');
+                    logToConsole(`Sparse checkout complete: ${result.entries?.length || 0} remote entries cached`, 'success');
                     const projectName = localPath.split('/').pop() || 'New Repo';
                     await window.api.saveProject({ name: projectName, path: localPath, url, placeholderRemoteUrl: url });
                     await loadProjects(localPath);
@@ -2866,9 +2866,9 @@ async function fetchTree(forceRefresh = false) {
             state.treeData[rootPath] = [];
         }
 
-        const remoteUrl = (project.placeholderRemoteUrl || project.url || '');
-        if (state.treeIsWorkingCopy && remoteUrl) {
-            if (forceRefresh) {
+        if (state.treeIsWorkingCopy) {
+            const remoteUrl = (project.placeholderRemoteUrl || project.url || '');
+            if (forceRefresh && remoteUrl) {
                 const oldListing = await window.api.placeholderGetRemoteListing(rootPath);
                 const oldSet = new Set(oldListing.success ? oldListing.entries : []);
 
@@ -2894,6 +2894,13 @@ async function fetchTree(forceRefresh = false) {
                 if (cached.success && cached.entries.length > 0) {
                     state.remoteTree = parseRemoteListingToTree(cached.entries, rootPath);
                     state.treeData[rootPath] = mergeTreeWithRemote(state.treeData[rootPath], rootPath);
+                } else if (forceRefresh || remoteUrl) {
+                    logToConsole('Cache empty, fetching remote listing...', 'system');
+                    const listing = await window.api.placeholderRefreshRemoteListing(rootPath);
+                    if (listing.success && listing.entries.length > 0) {
+                        state.remoteTree = parseRemoteListingToTree(listing.entries, rootPath);
+                        state.treeData[rootPath] = mergeTreeWithRemote(state.treeData[rootPath], rootPath);
+                    }
                 }
             }
         }
