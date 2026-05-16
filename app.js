@@ -1183,6 +1183,22 @@ async function refreshStatus() {
                 if (statusChar === '!') status = 'missing';
                 return { path, status };
             });
+
+            // Placeholder override: 0-byte modified files → placeholder status
+            if (state.placeholderEnabled) {
+                const scanResult = await window.api.placeholderScan(project.path);
+                if (scanResult.success) {
+                    state.placeholderStats = scanResult;
+                    const placeholderSet = new Set(
+                        scanResult.files.filter(f => f.isPlaceholder).map(f => f.relPath)
+                    );
+                    for (const file of state.workingCopy) {
+                        if (file.status === 'modified' && placeholderSet.has(file.path)) {
+                            file.status = 'placeholder';
+                        }
+                    }
+                }
+            }
         } else {
             state.workingCopy = [];
             // If auth failed, surface the login modal instead of retrying
@@ -1331,6 +1347,13 @@ function renderStatus() {
         return;
     }
     let html = '<div class="status-list">';
+    // Placeholder stats bar
+    if (state.placeholderEnabled && state.placeholderStats) {
+        const ps = state.placeholderStats;
+        html += `<div class="placeholder-stats-bar">
+            <span class="stat-item">${t('placeholder.stats', { placeholders: ps.placeholders, real: ps.realFiles, saved: formatFileSize(ps.savedBytes) })}</span>
+        </div>`;
+    }
     state.workingCopy.forEach((file, index) => {
         const isSelected = state.selectedFiles.has(file.path);
         const ep = escapePath(file.path);
@@ -1357,8 +1380,11 @@ function renderStatus() {
                          <button class="btn-primary" onclick="runSvn(['resolve', '--accept', 'working', '${ep}'])">${t('btn.resolveMine')}</button>
                          <button class="btn-secondary" onclick="runSvn(['resolve', '--accept', 'theirs-full', '${ep}'])">${t('btn.resolveTheirs')}</button>
                          <button class="btn-secondary" onclick="if(confirm('${t('msg.confirmRevert')} ${ep}?')) runSvn(['revert', '-R', '${ep}'])">${t('btn.revert')}</button>` :
+                file.status === 'placeholder' ?
+                `<button class="btn-primary" onclick="downloadPlaceholder('${ep}')">${t('placeholder.download')}</button>` :
                 `<button class="btn-secondary" onclick="showDiff('${ep}')">${t('btn.diff')}</button>
-                         <button class="btn-secondary" onclick="if(confirm('${t('msg.confirmRevert')} ${ep}?')) runSvn(['revert', '-R', '${ep}'])">${t('btn.revert')}</button>`
+                         <button class="btn-secondary" onclick="if(confirm('${t('msg.confirmRevert')} ${ep}?')) runSvn(['revert', '-R', '${ep}'])">${t('btn.revert')}</button>
+                         ${state.placeholderEnabled ? `<button class="btn-secondary" onclick="truncateToPlaceholder('${ep}')">${t('placeholder.truncate')}</button>` : ''}`
             }
                 </div>
             </div>
@@ -1377,6 +1403,38 @@ function renderStatus() {
     }
 
     elements.contentArea.innerHTML = html;
+}
+
+async function downloadPlaceholder(relPath) {
+    const project = state.projects[state.selectedProjectIndex];
+    if (!project) return;
+    showOperation(t('placeholder.downloading', { current: 1, total: 1 }));
+    const result = await window.api.placeholderDownload({
+        wcRoot: project.path,
+        files: [relPath],
+        remoteUrl: state.settings.placeholderRemoteUrl || ''
+    });
+    hideOperation();
+    if (result.success > 0) {
+        logToConsole(`Downloaded: ${relPath}`, 'success');
+    } else {
+        logToConsole(`Failed to download: ${relPath} — ${result.error || ''}`, 'error');
+    }
+    refreshStatus();
+}
+
+async function truncateToPlaceholder(relPath) {
+    const project = state.projects[state.selectedProjectIndex];
+    if (!project) return;
+    const absPath = project.path + '/' + relPath;
+    if (!confirm(`Convert to placeholder? ${relPath}`)) return;
+    const result = await window.api.placeholderTruncate({ files: [absPath] });
+    if (result.success > 0) {
+        logToConsole(`Converted to placeholder: ${relPath}`, 'success');
+    } else {
+        logToConsole(`Failed to truncate: ${relPath}`, 'error');
+    }
+    refreshStatus();
 }
 
 async function addAllUntracked() {
