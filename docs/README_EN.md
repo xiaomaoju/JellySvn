@@ -6,6 +6,8 @@ English | [中文](../README.md)
 
 Electron-based SVN GUI client.
 
+![JellySvn](ScreenShot1.png)
+
 ## Features
 
 - **Status** — View file status, bulk Add / Revert / Delete / Ignore

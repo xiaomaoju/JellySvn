@@ -6,6 +6,8 @@
 
 基于 Electron 的 SVN 图形化客户端。
 
+![JellySvn](docs/ScreenShot1.png)
+
 ## 功能
 
 - **状态管理** — 查看文件状态，支持批量 Add / Revert / Delete / Ignore
