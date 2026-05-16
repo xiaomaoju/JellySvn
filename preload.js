@@ -70,6 +70,7 @@ contextBridge.exposeInMainWorld('api', {
     placeholderGetRemoteListing: (dir) => ipcRenderer.invoke('placeholder:getRemoteListing', dir),
     placeholderRefreshRemoteListing: (dir) => ipcRenderer.invoke('placeholder:refreshRemoteListing', dir),
     placeholderDownloadFolder: (opts) => ipcRenderer.invoke('placeholder:downloadFolder', opts),
+    placeholderDownloadFile: (opts) => ipcRenderer.invoke('placeholder:downloadFile', opts),
     placeholderTruncateFolder: (opts) => ipcRenderer.invoke('placeholder:truncateFolder', opts),
     onPlaceholderProgress: (callback) => {
         ipcRenderer.removeAllListeners('placeholder:progress');

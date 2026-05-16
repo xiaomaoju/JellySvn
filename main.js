@@ -1146,6 +1146,54 @@ ipcMain.handle('placeholder:downloadFolder', async (event, { wcRoot, folderRelPa
     }
 });
 
+// Download a single file via sparse checkout: svn update --parents <file>
+ipcMain.handle('placeholder:downloadFile', async (event, { wcRoot, fileRelPath }) => {
+    const svnRoot = findSvnRoot(wcRoot) || wcRoot;
+    if (!isPathWithinProjects(svnRoot)) {
+        return { success: false, error: 'Refused: path outside known project' };
+    }
+    const targetPath = path.join(svnRoot, fileRelPath);
+
+    const authData = loadAuthWithDecrypt();
+    let creds = null;
+    try {
+        const infoOut = await new Promise((resolve) => {
+            const proc = spawn('svn', ['info', svnRoot]);
+            let out = '';
+            proc.stdout.on('data', d => out += d.toString());
+            proc.on('close', () => resolve(out));
+            proc.on('error', () => resolve(''));
+        });
+        const urlMatch = infoOut.match(/^URL:\s*(.+)$/m);
+        if (urlMatch) {
+            const repoUrl = urlMatch[1].trim().replace(/\/+$/, '');
+            const sortedKeys = Object.keys(authData).filter(k => k !== 'global').sort((a, b) => b.length - a.length);
+            for (const key of sortedKeys) {
+                const normKey = key.replace(/\/+$/, '');
+                if (repoUrl === normKey || repoUrl.startsWith(normKey + '/')) { creds = authData[key]; break; }
+            }
+        }
+    } catch (e) { /* fall through */ }
+    if (!creds && authData.global) creds = authData.global;
+
+    const updateArgs = ['update', '--parents', targetPath, '--non-interactive', '--trust-server-cert'];
+    if (creds) { updateArgs.push('--username', creds.username, '--password', creds.password); }
+
+    try {
+        const output = await new Promise((resolve, reject) => {
+            const proc = spawn('svn', updateArgs, { cwd: svnRoot });
+            let out = '', err = '';
+            proc.stdout.on('data', d => out += d.toString());
+            proc.stderr.on('data', d => err += d.toString());
+            proc.on('close', code => code === 0 ? resolve(out) : reject(new Error(err)));
+            proc.on('error', reject);
+        });
+        return { success: true, output };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+});
+
 // Truncate folder via sparse checkout: svn update --set-depth empty
 ipcMain.handle('placeholder:truncateFolder', async (event, { wcRoot, folderRelPath }) => {
     const svnRoot = findSvnRoot(wcRoot) || wcRoot;

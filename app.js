@@ -1549,29 +1549,33 @@ async function downloadPlaceholderTree(filePath, event) {
     event.stopPropagation();
     const project = state.projects[state.selectedProjectIndex];
     if (!project) return;
-    const parentDir = filePath.substring(0, filePath.lastIndexOf('/'));
-    const parentRelPath = parentDir.startsWith(project.path) ? parentDir.substring(project.path.length + 1) : parentDir;
+    const fileRelPath = filePath.startsWith(project.path) ? filePath.substring(project.path.length + 1) : filePath;
+    const fileName = filePath.split('/').pop();
     showOperation(t('placeholder.downloading', { current: 1, total: 1 }));
-    const result = await window.api.placeholderDownloadFolder({
+    const result = await window.api.placeholderDownloadFile({
         wcRoot: project.path,
-        folderRelPath: parentRelPath
+        fileRelPath
     });
     hideOperation();
     if (result.success) {
-        logToConsole(`Downloaded: ${parentRelPath}`, 'success');
-        const grandParent = parentDir.substring(0, parentDir.lastIndexOf('/'));
-        const gpItems = state.treeData[grandParent];
-        if (gpItems) {
-            const entry = gpItems.find(i => i.path === parentDir);
-            if (entry) entry.remote = false;
+        logToConsole(`Downloaded: ${fileName}`, 'success');
+        const parentDir = filePath.substring(0, filePath.lastIndexOf('/'));
+        const parentItems = state.treeData[parentDir];
+        if (parentItems) {
+            const entry = parentItems.find(i => i.path === filePath);
+            if (entry) {
+                entry.remote = false;
+                try {
+                    const st = await window.api.listDirectory(parentDir);
+                    if (st.success) {
+                        const localFile = st.items.find(i => i.path === filePath);
+                        if (localFile) { entry.size = localFile.size; entry.mtime = localFile.mtime; }
+                    }
+                } catch (_) {}
+            }
         }
     } else {
         logToConsole(`Failed to download: ${result.error}`, 'error');
-    }
-    const refreshed = await window.api.listDirectory(parentDir);
-    if (refreshed.success) {
-        state.treeData[parentDir] = mergeTreeWithRemote(refreshed.items, parentDir);
-        state.treeExpanded.add(parentDir);
     }
     render();
 }
